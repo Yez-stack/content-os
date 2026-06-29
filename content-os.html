@@ -701,20 +701,12 @@ S.load = async () => {
     } catch(e) { console.error('❌ [LOAD] ' + tbl + ': ' + e.message); results[tbl]=[]; }
   }
 
-  // 反向映射 snake_case → camelCase
-  const _SNAKE_TO_CAMEL = {};
-  for(const [k,v] of Object.entries(_CAMEL_TO_SNAKE)) _SNAKE_TO_CAMEL[v] = k;
-  const _toCamel = (row) => {
-    const out = {};
-    for(const k of Object.keys(row)) { out[_SNAKE_TO_CAMEL[k]||k] = row[k]; }
-    return out;
-  };
-
+  // 反向映射 snake_case → camelCase（复用 _toCamel2）
   S.db = {
     version: C.VERSION, lastModified: H.nowISO(),
-    topics: (results.topics||[]).map(_toCamel),
-    contents: (results.contents||[]).map(_toCamel),
-    inspirations: (results.inspirations||[]).map(_toCamel),
+    topics: (results.topics||[]).map(_toCamel2),
+    contents: (results.contents||[]).map(_toCamel2),
+    inspirations: (results.inspirations||[]).map(_toCamel2),
     users: [], knowledge: [], competitors: [], templates: [],
     config: {}
   };
@@ -920,6 +912,15 @@ const _CAMEL_TO_SNAKE = {
 
 const _toSnake = (key) => _CAMEL_TO_SNAKE[key] || key;
 
+// --- snake_case → camelCase 反向映射（供 S.load 和 S._crud 使用） ---
+const _SNAKE_TO_CAMEL2 = {};
+for(const [k,v] of Object.entries(_CAMEL_TO_SNAKE)) _SNAKE_TO_CAMEL2[v] = k;
+const _toCamel2 = (row) => {
+  const out = {};
+  for(const k of Object.keys(row)) { out[_SNAKE_TO_CAMEL2[k]||k] = row[k]; }
+  return out;
+};
+
 const SANITIZE = {
   topics(obj) {
     const allowed = ['id','title','status','goal','priority','theme','format','hook','tags','notes','coreContent','plannedDate','estimatedWorkload','sourcePlatform','sourceUrl','sourceInspirationId','convertedTopicId','parsedMetrics','coverImage','publishDate','publishedDate','description','rating','workload','createdAt','updatedAt'];
@@ -980,12 +981,14 @@ S._crud = (collection) => {
       const before = S.db[collection].length;
       const clean = sanitize(item);
       try {
-        const { error } = await SUPABASE.from(tbl).insert(clean);
+        const { data: returned, error } = await SUPABASE.from(tbl).insert(clean).select();
         if(error) { console.error('❌ [SUPABASE] insert ' + tbl + ': ' + error.message + ' | ' + JSON.stringify(error)); alert('保存失败：' + error.message); return item; }
+        // Supabase 有 data 返回时优先使用（确保 snake_case→camelCase 一致性）
+        const final = (returned && returned[0]) ? _toCamel2(returned[0]) : item;
+        S.db[collection].push(final);
+        console.log('✅ [CRUD] '+collection+'.add("'+(item.title||item.content||item.id)+'"): '+before+'→'+S.db[collection].length);
+        return final;
       } catch(e) { console.error('❌ [SUPABASE] insert ' + tbl + ':', e.message); alert('网络异常，数据可能未保存'); return item; }
-      S.db[collection].push(item);
-      console.log('✅ [CRUD] '+collection+'.add("'+(item.title||item.content||item.id)+'"): '+before+'→'+S.db[collection].length);
-      return item;
     },
     update: async (id, patch) => {
       const idx=S.db[collection].findIndex(x=>x.id===id);
@@ -2171,10 +2174,10 @@ P._openTopicModal = async (topicId, themes, formats, hooks, goals) => {
   delete data.tags_str;
 
   if(isEdit) {
-    S.topics.update(topicId, {...data, tags});
+    await S.topics.update(topicId, {...data, tags});
     UI.toast('选题已更新');
   } else {
-    S.topics.add({
+    await S.topics.add({
       id: H.uid('top_'),
       title: data.title,
       coreContent: data.coreContent||'',
