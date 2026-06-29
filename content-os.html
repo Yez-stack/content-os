@@ -688,17 +688,17 @@ S.db = null;
 // ============ 主加载流程（Supabase 为唯一数据源） ============
 S.load = async () => {
   console.log('☁️  [SAFELOAD] 从 Supabase 加载数据...');
-  const tables = ['inspirations','topics','contents'];
+  const tables = ['inspirations','topics','contents','users','knowledge','competitors','templates'];
   try {
     const results = {};
     let total = 0;
     for(const tbl of tables) {
       try {
         const { data, error } = await SUPABASE.from(tbl).select('*');
-        if(error) { console.warn('⚠ Supabase 读取 '+tbl+':', error.message); results[tbl]=[]; continue; }
+        if(error) { console.error('❌ [SUPABASE] 读取 '+tbl+': ' + error.message); results[tbl]=[]; continue; }
         results[tbl] = data || [];
         total += results[tbl].length;
-      } catch(e) { console.warn('⚠ Supabase 读取 '+tbl+':', e.message); results[tbl]=[]; }
+      } catch(e) { console.error('❌ [SUPABASE] 读取 '+tbl+': ' + e.message); results[tbl]=[]; }
     }
     console.log('☁️  [SAFELOAD] 加载完成: '+total+' 条 ('+
       Object.entries(results).map(([k,v])=>k+':'+v.length).join(', ')+')');
@@ -707,6 +707,10 @@ S.load = async () => {
       inspirations: results.inspirations,
       topics: results.topics,
       contents: results.contents,
+      users: results.users,
+      knowledge: results.knowledge,
+      competitors: results.competitors,
+      templates: results.templates,
       config: {}
     };
     // 加载 config
@@ -887,32 +891,33 @@ S._crud = (collection) => {
     get:   (id) => S.db[collection].find(x=>x.id===id)||null,
     add:   async (item) => {
       const before = S.db[collection].length;
-      S.db[collection].push(item);
+      // ⚠️ 先写 Supabase，成功后再写内存
       try {
         const { error } = await SUPABASE.from(tbl).insert(item);
-        if(error) console.warn('⚠ Supabase insert '+tbl+':', error.message);
-      } catch(e) { console.warn('⚠ Supabase insert '+tbl+':', e.message); }
-      console.log('🔍 [CRUD] '+collection+'.add("'+(item.title||item.content||item.id)+'"): '+before+'→'+S.db[collection].length);
+        if(error) { console.error('❌ [SUPABASE] insert ' + tbl + ': ' + error.message + ' | ' + JSON.stringify(error)); alert('保存失败：' + error.message); return item; }
+      } catch(e) { console.error('❌ [SUPABASE] insert ' + tbl + ':', e.message); alert('网络异常，数据可能未保存'); return item; }
+      S.db[collection].push(item);
+      console.log('✅ [CRUD] '+collection+'.add("'+(item.title||item.content||item.id)+'"): '+before+'→'+S.db[collection].length);
       return item;
     },
     update: async (id, patch) => {
       const idx=S.db[collection].findIndex(x=>x.id===id);
       if(idx===-1) { console.warn('🔍 [CRUD] '+collection+'.update('+id+') 未找到'); return null; }
-      Object.assign(S.db[collection][idx], patch, {updatedAt:H.nowISO()});
       try {
         const { error } = await SUPABASE.from(tbl).update(patch).eq('id', id);
-        if(error) console.warn('⚠ Supabase update '+tbl+':', error.message);
-      } catch(e) { console.warn('⚠ Supabase update '+tbl+':', e.message); }
+        if(error) { console.error('❌ [SUPABASE] update ' + tbl + ': ' + error.message); return null; }
+      } catch(e) { console.error('❌ [SUPABASE] update ' + tbl + ':', e.message); return null; }
+      Object.assign(S.db[collection][idx], patch, {updatedAt:H.nowISO()});
       return S.db[collection][idx];
     },
     remove: async (id) => {
       const before = S.db[collection].length;
-      S.db[collection]=S.db[collection].filter(x=>x.id!==id);
       try {
         const { error } = await SUPABASE.from(tbl).delete().eq('id', id);
-        if(error) console.warn('⚠ Supabase delete '+tbl+':', error.message);
-      } catch(e) { console.warn('⚠ Supabase delete '+tbl+':', e.message); }
-      console.log('🔍 [CRUD] '+collection+'.remove('+id+'): '+before+'→'+S.db[collection].length);
+        if(error) { console.error('❌ [SUPABASE] delete ' + tbl + ': ' + error.message); return; }
+      } catch(e) { console.error('❌ [SUPABASE] delete ' + tbl + ':', e.message); return; }
+      S.db[collection]=S.db[collection].filter(x=>x.id!==id);
+      console.log('✅ [CRUD] '+collection+'.remove('+id+'): '+before+'→'+S.db[collection].length);
     },
   };
 };
@@ -922,12 +927,10 @@ S.inspirations = S._crud('inspirations');
 S.topics      = S._crud('topics');
 S.contents    = S._crud('contents');
 
-// --- 其他模块存根（保持 UI 不崩溃，数据均为空） ---
-const _stub = () => ({ all:()=>[], get:()=>null, add:async()=>null, update:async()=>null, remove:async()=>{} });
-S.users       = _stub();
-S.knowledge   = _stub();
-S.competitors = _stub();
-S.templates   = _stub();
+S.users       = S._crud('users');
+S.knowledge   = S._crud('knowledge');
+S.competitors = S._crud('competitors');
+S.templates   = S._crud('templates');
 
 // --- 配置 CRUD ---
 S.config = {
