@@ -1736,7 +1736,7 @@ P.renderInspirations = () => {
   document.querySelectorAll('[data-delete-insp]').forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation();
     const confirmed = await UI.confirm('删除灵感','确定删除这条灵感？此操作不可恢复。',{danger:true,confirmText:'删除'});
-    if(confirmed) { S.inspirations.remove(b.dataset.deleteInsp); UI.toast('灵感已删除'); P.renderInspirations(); }
+    if(confirmed) { await S.inspirations.remove(b.dataset.deleteInsp); UI.toast('灵感已删除'); P.renderInspirations(); }
   });
   document.querySelectorAll('[data-insp-filter]').forEach(b=>b.onclick=()=>{P._inspFilter=b.dataset.inspFilter;P.renderInspirations();});
 };
@@ -1885,7 +1885,7 @@ P.renderTopics = (containerId) => {
   document.querySelectorAll('[data-edit-topic]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();P._openTopicModal(b.dataset.editTopic, themes, formats, hooks, goals);});
   document.querySelectorAll('[data-delete-topic]').forEach(b=>b.onclick=async(e)=>{e.stopPropagation();
     const confirmed = await UI.confirm('删除选题','确定删除这条选题？已有发布内容不受影响。',{danger:true,confirmText:'删除'});
-    if(confirmed) { S.topics.remove(b.dataset.deleteTopic); UI.toast('选题已删除'); P.renderTopics(); }
+    if(confirmed) { await S.topics.remove(b.dataset.deleteTopic); UI.toast('选题已删除'); P.renderTopics(); }
   });
   document.querySelectorAll('[data-publish-topic]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();P._openPublishModal(b.dataset.publishTopic);});
   document.querySelectorAll('[data-click-topic]').forEach(b=>b.onclick=()=>P._openTopicDrawer(b.dataset.clickTopic));
@@ -2790,7 +2790,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
   document.querySelectorAll('[data-view-content]').forEach(b=>{b.onclick=()=>P._openContentDrawer(b.dataset.viewContent);});
   document.querySelectorAll('[data-edit-content]').forEach(b=>{b.onclick=()=>P._openContentEditModal(b.dataset.editContent);});
   document.querySelectorAll('[data-delete-content]').forEach(b=>{
-    b.onclick=async()=>{const c=await UI.confirm('删除内容','确定删除这条内容？选题不会被删除。',{danger:true,confirmText:'删除'});if(c){S.contents.remove(b.dataset.deleteContent);UI.toast('内容已删除');P._resetPage();P.renderContents();}};
+    b.onclick=async()=>{const c=await UI.confirm('删除内容','确定删除这条内容？选题不会被删除。',{danger:true,confirmText:'删除'});if(c){await S.contents.remove(b.dataset.deleteContent);UI.toast('内容已删除');P._resetPage();P.renderContents();}};
   });
 };
 
@@ -3675,7 +3675,7 @@ P.renderUsers = () => {
   });
   document.querySelectorAll('[data-delete-user]').forEach(b=>b.onclick=async(e)=>{e.stopPropagation();
     const confirmed=await UI.confirm('删除用户','确定删除该用户？',{danger:true,confirmText:'删除'});
-    if(confirmed){S.users.remove(b.dataset.deleteUser);UI.toast('用户已删除');P.renderUsers();}
+    if(confirmed){await S.users.remove(b.dataset.deleteUser);UI.toast('用户已删除');P.renderUsers();}
   });
   document.querySelectorAll('[data-user-page]').forEach(b=>{b.onclick=()=>{const v=b.dataset.userPage;if(v==='prev')P._userPage=Math.max(1,P._userPage-1);else if(v==='next')P._userPage=Math.min(totalPages||1,P._userPage+1);else P._userPage=parseInt(v)||1;P.renderUsers();};});
 
@@ -4064,7 +4064,7 @@ P.renderKnowledge = () => {
   document.getElementById('k-add-btn').onclick = () => P._openKnowledgeModal();
   document.querySelectorAll('[data-view-k]').forEach(el=>el.onclick=()=>P._openKnowledgeDrawer(el.dataset.viewK));
   document.querySelectorAll('[data-edit-k]').forEach(el=>el.onclick=(e)=>{e.stopPropagation();P._openKnowledgeModal(el.dataset.editK);});
-  document.querySelectorAll('[data-delete-k]').forEach(el=>el.onclick=async(e)=>{e.stopPropagation();const cfm=await UI.confirm('删除知识','确定删除这条知识？',{danger:true,confirmText:'删除'});if(cfm){S.knowledge.remove(el.dataset.deleteK);UI.toast('知识已删除');P.renderKnowledge();}});
+  document.querySelectorAll('[data-delete-k]').forEach(el=>el.onclick=async(e)=>{e.stopPropagation();const cfm=await UI.confirm('删除知识','确定删除这条知识？',{danger:true,confirmText:'删除'});if(cfm){await S.knowledge.remove(el.dataset.deleteK);UI.toast('知识已删除');P.renderKnowledge();}});
   document.querySelectorAll('[data-k-page]').forEach(b=>{b.onclick=()=>{const v=b.dataset.kPage;if(v==='prev')P._kPage=Math.max(1,P._kPage-1);else if(v==='next')P._kPage=Math.min(totalPages||1,P._kPage+1);else P._kPage=parseInt(v)||1;P.renderKnowledge();};});
 };
 
@@ -4176,7 +4176,7 @@ P._openKnowledgeModal = async (kId) => {
     if(isEdit) {
       document.getElementById('k-delete-btn').onclick = async () => {
         const cfm = await UI.confirm('删除知识','确定删除这条知识？',{danger:true,confirmText:'删除'});
-        if(cfm) { S.knowledge.remove(kId); UI.closeModal({}); UI.toast('知识已删除'); P.renderKnowledge(); }
+        if(cfm) { await S.knowledge.remove(kId); UI.closeModal({}); UI.toast('知识已删除'); P.renderKnowledge(); }
       };
     }
   }, 50);
