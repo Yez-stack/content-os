@@ -1013,9 +1013,18 @@ S._crud = (collection) => {
       const before = S.db[collection].length;
       try {
         const { error } = await SUPABASE.from(tbl).delete().eq('id', id);
-        if(error) { console.error('❌ [SUPABASE] delete ' + tbl + ': ' + error.message); return; }
-      } catch(e) { console.error('❌ [SUPABASE] delete ' + tbl + ':', e.message); return; }
-      S.db[collection]=S.db[collection].filter(x=>x.id!==id);
+        if(error) {
+          console.error('❌ [SUPABASE] delete ' + tbl + ': ' + error.message);
+          alert('删除失败：' + error.message);
+          return;
+        }
+      } catch(e) {
+        console.error('❌ [SUPABASE] delete ' + tbl + ':', e.message);
+        alert('删除失败：' + e.message);
+        return;
+      }
+      // 只有 Supabase 删除成功后才更新本地内存
+      S.db[collection] = S.db[collection].filter(x => x.id !== id);
       console.log('✅ [CRUD] '+collection+'.remove('+id+'): '+before+'→'+S.db[collection].length);
     },
   };
