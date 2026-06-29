@@ -687,7 +687,7 @@ S.db = null;
 
 // ============ 主加载流程（Supabase 为唯一数据源） ============
 S.load = async () => {
-  console.log('☁️  [SAFELOAD] 从 Supabase 加载数据...');
+  console.log('☁️  [LOAD] ===== 开始从 Supabase 加载数据 =====');
   const tables = ['inspirations','topics','contents','users','knowledge','competitors','templates'];
   try {
     const results = {};
@@ -695,12 +695,13 @@ S.load = async () => {
     for(const tbl of tables) {
       try {
         const { data, error } = await SUPABASE.from(tbl).select('*');
-        if(error) { console.error('❌ [SUPABASE] 读取 '+tbl+': ' + error.message); results[tbl]=[]; continue; }
+        console.log('☁️  [LOAD] ' + tbl + ': ' + (error ? '❌ ' + error.message : '✅ ' + (data ? data.length : 0) + ' 条'), data ? data.slice(0, 1) : null);
+        if(error) { results[tbl]=[]; continue; }
         results[tbl] = data || [];
         total += results[tbl].length;
-      } catch(e) { console.error('❌ [SUPABASE] 读取 '+tbl+': ' + e.message); results[tbl]=[]; }
+      } catch(e) { console.error('❌ [LOAD] ' + tbl + ': ' + e.message); results[tbl]=[]; }
     }
-    console.log('☁️  [SAFELOAD] 加载完成: '+total+' 条 ('+
+    console.log('☁️  [LOAD] ===== 完成: ' + total + ' 条 ===== ('+
       Object.entries(results).map(([k,v])=>k+':'+v.length).join(', ')+')');
     S.db = {
       version: C.VERSION, lastModified: H.nowISO(),
@@ -723,7 +724,8 @@ S.load = async () => {
     for(const ck of Object.keys(defCfg)) { if(!(ck in S.db.config)) S.db.config[ck] = defCfg[ck]; }
     return true;
   } catch(e) {
-    console.error('❌ [SAFELOAD] 加载失败:', e.message);
+    console.error('❌ [LOAD] 严重失败:', e.message, e);
+    alert('数据加载失败：' + e.message + '\n请刷新页面重试');
     S.db = S.emptyDB();
     return false;
   }
