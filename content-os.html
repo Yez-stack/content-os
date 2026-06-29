@@ -885,45 +885,85 @@ window.__lsdiag = () => {
 };
 
 // ========== 数据安全层（Data Sanitizer） ==========
-// 所有 Supabase 写入必须经过 sanitize，100% 匹配 schema-v2
+// 所有 Supabase 写入必须经过 sanitize
+// 步骤：1) camelCase→snake_case 映射  2) 白名单过滤  3) 非法字段丢弃
+
+// --- camelCase → snake_case 映射表 ---
+const _CAMEL_TO_SNAKE = {
+  createdAt: 'created_at', updatedAt: 'updated_at',
+  topicId: 'topic_id', userId: 'user_id',
+  heatLevel: 'heat_level', heatValue: 'heat_value',
+  mentionCount: 'mention_count',
+  contentDirection: 'content_direction', hookStructure: 'hook_structure',
+  sourceUrl: 'source_url', sourceLink: 'source_link',
+  platformPostIds: 'platform_post_ids', dataSourceType: 'data_source_type',
+  publishedAt: 'published_at', fetchedAt: 'fetched_at',
+  leaveDate: 'leave_date', joinDate: 'join_date',
+  acquisitionCost: 'acquisition_cost',
+  estimatedDate: 'estimated_date', plannedDate: 'planned_date',
+  estimatedWorkload: 'estimated_workload',
+  publishedDate: 'published_date', publishDate: 'publish_date',
+  sourcePlatform: 'source_platform',
+  sourceInspirationId: 'source_inspiration_id',
+  convertedTopicId: 'converted_topic_id',
+  parsedMetrics: 'parsed_metrics',
+  coverImage: 'cover_image',
+  productionCostMinutes: 'production_cost_minutes',
+  bodyText: 'body_text', contentLink: 'content_link',
+  publishTime: 'publish_time', publishScreenshot: 'publish_screenshot',
+  coreContent: 'core_content', recordDays: 'record_days',
+  followerGrowth: 'follower_growth', adCost: 'ad_cost',
+  dataUpdatedAt: 'data_updated_at',
+  rawTitle: 'raw_title',
+};
+
+const _toSnake = (key) => _CAMEL_TO_SNAKE[key] || key;
 
 const SANITIZE = {
   topics(obj) {
-    const allowed = ['id','title','status','created_at','user_id','createdAt','updatedAt'];
+    const allowed = ['id','title','status'];
     return this._clean('topics', allowed, obj);
   },
   contents(obj) {
-    const allowed = ['id','topic_id','topicId','title','body','created_at','user_id','createdAt','updatedAt'];
+    const allowed = ['id','topic_id','title','body'];
     return this._clean('contents', allowed, obj);
   },
   inspirations(obj) {
-    const allowed = ['id','content','source','created_at','user_id','createdAt','updatedAt'];
+    const allowed = ['id','content','source'];
     return this._clean('inspirations', allowed, obj);
   },
   users(obj) {
-    const allowed = ['id','nickname','name','status','remark','tags','createdAt','updatedAt'];
+    const allowed = ['id','nickname','name','status','remark','tags'];
     return this._clean('users', allowed, obj);
   },
   knowledge(obj) {
-    const allowed = ['id','title','content','tags','createdAt','updatedAt'];
+    const allowed = ['id','title','content','tags'];
     return this._clean('knowledge', allowed, obj);
   },
   competitors(obj) {
-    const allowed = ['id','title','name','platform','url','notes','tags','createdAt','updatedAt'];
+    const allowed = ['id','title','name','platform','url','notes','tags'];
     return this._clean('competitors', allowed, obj);
   },
   templates(obj) {
-    const allowed = ['id','title','content','tags','createdAt','updatedAt'];
+    const allowed = ['id','title','content','tags'];
     return this._clean('templates', allowed, obj);
   },
-  // 内部清洗引擎
+  // 内部清洗引擎：映射 + 过滤
   _clean(table, allowed, obj) {
     const safe = {};
     const dirty = [];
+    const mapped = [];
     for(const k of Object.keys(obj)) {
-      if(allowed.includes(k)) { safe[k] = obj[k]; } else { dirty.push(k); }
+      const snk = _toSnake(k);
+      if(allowed.includes(snk)) {
+        if(snk !== k) mapped.push(k + '→' + snk);
+        safe[snk] = obj[k];
+      } else {
+        dirty.push(k);
+      }
     }
     if(dirty.length) console.warn('🧹 [SANITIZE] ' + table + ' 过滤非法字段: ' + dirty.join(', '));
+    if(mapped.length) console.log('🔀 [SANITIZE] ' + table + ' 命名转换: ' + mapped.join(', '));
     console.log('🧹 [SANITIZED] ' + table, safe);
     return safe;
   }
