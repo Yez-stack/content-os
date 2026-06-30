@@ -72,6 +72,9 @@
   .cos-table th { text-align:left; padding:10px 12px; font-weight:500; color:#64748b; border-bottom:1px solid #e2e8f0; white-space:nowrap; }
   .cos-table td { padding:10px 12px; border-bottom:1px solid #f1f5f9; }
   .cos-table tr:hover td { background:#f8fafc; }
+  .cos-inline-edit { display:inline-block; min-width:32px; padding:2px 6px; border-radius:4px; cursor:text; outline:none; }
+  .cos-inline-edit:hover { background:#eef2ff; }
+  .cos-inline-edit:focus { background:#fff; box-shadow:0 0 0 2px #6366f1; }
 
   /* === 标题列 === */
   .cos-td-title { min-width:200px; }
@@ -761,7 +764,7 @@ S._migrate = () => {
   // 确保每个 content 的 metrics 有完整字段
   if(S.db.contents) S.db.contents.forEach(c=>{
     if(!c.metrics) c.metrics={};
-    const numFields=['exposure','likes','comments','favorites','shares','downloads','followerGrowth','adCost'];
+    const numFields=['exposure','views','likes','comments','favorites','shares','downloads','followerGrowth','adCost'];
     numFields.forEach(f=>{ c.metrics[f]=parseInt(c.metrics[f])||0; });
     if(!('recordDays' in c.metrics)) c.metrics.recordDays=[];
     if(!('dataUpdatedAt' in c.metrics)) c.metrics.dataUpdatedAt=null;
@@ -2649,7 +2652,7 @@ P.renderContents = (containerId) => {
   } else {
     html += `<div class="overflow-x-auto"><table class="cos-table">
       <thead><tr>
-        <th>封面</th><th style="min-width:220px">标题</th><th>平台</th><th>发布时间</th><th>曝光</th><th>点赞</th><th>评论</th><th>收藏</th><th>分享</th><th>投流</th><th>金额</th><th>操作</th>
+        <th>封面</th><th style="min-width:220px">标题</th><th>平台</th><th>发布时间</th><th>观看数</th><th>曝光</th><th>点赞</th><th>评论</th><th>收藏</th><th>分享</th><th>投流</th><th>金额</th><th>操作</th>
       </tr></thead><tbody>
       ${pageItems.map(c=>{
         const hasAd=(c.metrics?.adCost||0)>0;
@@ -2658,11 +2661,12 @@ P.renderContents = (containerId) => {
         <td class="cos-td-title"><div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900" data-view-content="${c.id}">${H.esc(H.truncate(c.title,20))}</span><span class="title-tooltip-text">${H.esc(c.title)}</span></div></td>
         <td><span class="cos-tag">${H.esc(c.platform)}</span></td>
         <td class="text-xs text-gray-500 whitespace-nowrap">${H.showDate(c.publishDate)}</td>
-        <td class="text-xs text-gray-600 font-mono tabular-nums">${H.fmtNum(c.metrics?.exposure)}</td>
-        <td class="text-xs text-gray-600 font-mono tabular-nums">${H.fmtNum(c.metrics?.likes)}</td>
-        <td class="text-xs text-gray-600 font-mono tabular-nums">${H.fmtNum(c.metrics?.comments)}</td>
-        <td class="text-xs text-gray-600 font-mono tabular-nums">${H.fmtNum(c.metrics?.favorites)}</td>
-        <td class="text-xs text-gray-600 font-mono tabular-nums">${H.fmtNum(c.metrics?.shares)}</td>
+        <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-views-edit="${c.id}" contenteditable="true" data-placeholder="0">${c.metrics?.views||0}</span></td>
+        <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-metric-edit="${c.id}" data-metric-field="exposure" contenteditable="true">${c.metrics?.exposure||0}</span></td>
+        <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-metric-edit="${c.id}" data-metric-field="likes" contenteditable="true">${c.metrics?.likes||0}</span></td>
+        <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-metric-edit="${c.id}" data-metric-field="comments" contenteditable="true">${c.metrics?.comments||0}</span></td>
+        <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-metric-edit="${c.id}" data-metric-field="favorites" contenteditable="true">${c.metrics?.favorites||0}</span></td>
+        <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-metric-edit="${c.id}" data-metric-field="shares" contenteditable="true">${c.metrics?.shares||0}</span></td>
         <td>${hasAd?'<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-yellow-50 text-yellow-700">是</span>':'<span class="text-xs text-gray-400">-</span>'}</td>
         <td class="text-xs text-gray-600 font-mono tabular-nums">${hasAd?'¥'+H.fmtNum(c.metrics?.adCost):'-'}</td>
         <td><div class="flex gap-0.5">
@@ -2708,6 +2712,25 @@ P._renderFilterGroup = (label,key,options,selected) => {
 
 P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
   const F = P._contentFilters;
+
+  // 数据指标 行内编辑（观看数/曝光/点赞/评论/收藏/分享 通用）
+  const metricLabels = { views:'观看数', exposure:'曝光', likes:'点赞', comments:'评论', favorites:'收藏', shares:'分享' };
+  document.querySelectorAll('[data-metric-edit], [data-views-edit]').forEach(el=>{
+    const field = el.dataset.metricField || 'views';
+    const cid = el.dataset.metricEdit || el.dataset.viewsEdit;
+    el.addEventListener('blur', async () => {
+      const val = parseInt(el.textContent.replace(/[^\d]/g,'')) || 0;
+      const c = S.contents.get(cid);
+      if(!c) return;
+      const newMetrics = { ...(c.metrics||{}), [field]: val };
+      await S.contents.update(cid, { metrics: newMetrics });
+      el.textContent = val;
+      UI.toast((metricLabels[field]||field)+'已更新');
+    });
+    el.addEventListener('keydown', (e) => {
+      if(e.key==='Enter'){ e.preventDefault(); el.blur(); }
+    });
+  });
 
   // 搜索
   const si=document.getElementById('content-search');
@@ -2863,6 +2886,7 @@ P._openContentEditModal = async (contentId) => {
         </div>
         <div class="border-t pt-3"><h3 class="text-sm font-semibold text-gray-700 mb-3">运营数据</h3></div>
         <div class="grid grid-cols-2 gap-4">
+          <div>${UI.renderField('观看数','views','number',String(c.metrics?.views||0))}</div>
           <div>${UI.renderField('曝光','exposure','number',String(c.metrics?.exposure||0))}</div>
           <div>${UI.renderField('点赞','likes','number',String(c.metrics?.likes||0))}</div>
           <div>${UI.renderField('评论','comments','number',String(c.metrics?.comments||0))}</div>
@@ -2938,7 +2962,7 @@ P._openContentEditModal = async (contentId) => {
 
   const data = result;
   const metrics = {
-    exposure: parseInt(data.exposure)||0, likes: parseInt(data.likes)||0,
+    exposure: parseInt(data.exposure)||0, views: parseInt(data.views)||0, likes: parseInt(data.likes)||0,
     comments: parseInt(data.comments)||0, favorites: parseInt(data.favorites)||0,
     shares: parseInt(data.shares)||0, downloads: parseInt(data.downloads)||0,
     followerGrowth: parseInt(data.followerGrowth)||0, adCost: parseInt(data.adCost)||0,
