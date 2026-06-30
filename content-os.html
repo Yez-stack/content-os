@@ -1103,7 +1103,7 @@ S.publishTopic = (topicId, publishData) => {
     createdAt: H.nowISO(),
     updatedAt: H.nowISO()
   };
-  S.contents.add(content);
+  await S.contents.add(content);
   S.topics.update(topicId, { status:'published' });
   // 如果是从灵感转来的，更新灵感状态
   const insp = S.inspirations.all().find(i=>i.convertedTopicId===topicId);
@@ -1135,7 +1135,7 @@ S.inspirationToTopic = (inspId) => {
     createdAt: H.nowISO(),
     updatedAt: H.nowISO()
   };
-  S.topics.add(topic);
+  await S.topics.add(topic);
   S.inspirations.update(inspId, { status:'converted', convertedTopicId:topicId });
   return topic;
 };
@@ -2054,7 +2054,7 @@ P._openLinkParseModal = async (themes, formats, hooks, goals) => {
         createdAt: H.nowISO(),
         updatedAt: H.nowISO(),
       };
-      S.topics.add(topic);
+      await S.topics.add(topic);
       UI.closeModal(data);
       UI.toast('✅ 选题已保存到选题库');
       P.renderTopics();
@@ -2415,10 +2415,10 @@ P._openInspModal = async (inspId) => {
   delete data.tags_str;
 
   if(isEdit) {
-    S.inspirations.update(inspId, {...data, tags});
+    await S.inspirations.update(inspId, {...data, tags});
     UI.toast('灵感已更新');
   } else {
-    S.inspirations.add({
+    await S.inspirations.add({
       id: H.uid('insp_'),
       title: data.title,
       description: data.description||'',
@@ -3822,7 +3822,7 @@ P._openUserModal = async (userId) => {
     UI.toast('用户已更新');
   } else {
     const d = H.parseDate(result.joinDate) || result.joinDate || '';
-    S.users.add({ id:H.uid('usr_'), nickname:result.nickname, date:d, joinDate:d, source:result.source||'', device:result.device||'', acquisitionCost:parseFloat(result.acquisitionCost)||0, status:'active', leaveDate:null, remark:'当前用户', createdAt:H.nowISO(), updatedAt:H.nowISO() });
+    await S.users.add({ id:H.uid('usr_'), nickname:result.nickname, date:d, joinDate:d, source:result.source||'', device:result.device||'', acquisitionCost:parseFloat(result.acquisitionCost)||0, status:'active', leaveDate:null, remark:'当前用户', createdAt:H.nowISO(), updatedAt:H.nowISO() });
     UI.toast('用户已添加');
   }
   P.renderUsers();
@@ -4203,7 +4203,7 @@ P._openKnowledgeModal = async (kId) => {
     S.knowledge.update(kId, {...result, tags});
     UI.toast('知识已更新');
   } else {
-    S.knowledge.add({
+    await S.knowledge.add({
       id: H.uid('kno_'),
       title: result.title,
       content: result.content,
