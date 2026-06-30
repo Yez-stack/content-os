@@ -704,7 +704,7 @@ S.load = async () => {
   const results = {};
   let total = 0;
 
-  for(const tbl of ['topics','contents','inspirations']) {
+  for(const tbl of ['topics','contents','inspirations','users']) {
     try {
       const { data, error } = await SUPABASE.from(tbl).select('*');
       console.log('🔍 [SUPABASE RAW] ' + tbl + ' → error=' + (error ? error.message : 'null') + ', data=' + (data ? data.length + '条' : 'null'), data||[]);
@@ -718,15 +718,17 @@ S.load = async () => {
   const mapped_topics = (results.topics||[]).map(_toCamel2);
   const mapped_contents = (results.contents||[]).map(_toCamel2);
   const mapped_inspirations = (results.inspirations||[]).map(_toCamel2);
+  const mapped_users = (results.users||[]).map(_toCamel2);
   console.log('🔍 [MAPPED DATA] topics:', mapped_topics.length + '条', mapped_topics[0]||null);
   console.log('🔍 [MAPPED DATA] contents:', mapped_contents.length + '条', mapped_contents[0]||null);
+  console.log('🔍 [MAPPED DATA] users:', mapped_users.length + '条');
 
   S.db = {
     version: C.VERSION, lastModified: H.nowISO(),
     topics: mapped_topics,
     contents: mapped_contents,
     inspirations: mapped_inspirations,
-    users: [], knowledge: [], competitors: [], templates: [],
+    users: mapped_users, knowledge: [], competitors: [], templates: [],
     config: {}
   };
   console.log('🔍 [S.DB AFTER] S.db.topics:', S.db.topics.length + '条', S.db.topics);
