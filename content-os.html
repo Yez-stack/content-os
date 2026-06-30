@@ -1728,8 +1728,8 @@ P.renderInspirations = () => {
   document.getElementById('page-body').innerHTML = html;
 
   // 事件
-  document.querySelectorAll('[data-add-inspiration]').forEach(b=>b.onclick=()=>P._openInspModal());
-  document.querySelectorAll('[data-edit-insp]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();P._openInspModal(b.dataset.editInsp);});
+  document.querySelectorAll('[data-add-inspiration]').forEach(b=>b.onclick=async()=>await P._openInspModal());
+  document.querySelectorAll('[data-edit-insp]').forEach(b=>b.onclick=async(e)=>{e.stopPropagation();await P._openInspModal(b.dataset.editInsp);});
   document.querySelectorAll('[data-click-insp]').forEach(b=>b.onclick=()=>P._openInspDrawer(b.dataset.clickInsp));
   document.querySelectorAll('[data-insp-to-topic]').forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation();
