@@ -100,13 +100,14 @@
   .img-thumb { width:40px; height:40px; border-radius:6px; object-fit:cover; border:1px solid #f1f5f9; }
 
   /* === 表格排序图标 === */
-  .sortable-th { cursor: pointer; user-select: none; white-space: nowrap; }
+  .sortable-th { cursor: pointer; user-select: none; white-space: nowrap; vertical-align: middle; }
   .sortable-th:hover { color: #1e40af; }
   .sortable-th.active { color: #2563eb; }
-  .sort-triangle-icon { display: inline-flex; flex-direction: column; justify-content: center; align-items: center; width: 14px; height: 16px; margin-left: 5px; vertical-align: middle; position: relative; top: 2px; }
+  .sortable-th .th-inner { display: inline-flex; align-items: center; gap: 4px; line-height: 1; }
+  .sort-triangle-icon { display: inline-flex; flex-direction: column; justify-content: center; align-items: center; width: 10px; height: 12px; flex-shrink: 0; position: relative; top: 0; }
   .sort-triangle-icon i { display: block; width: 0; height: 0; }
-  .sort-triangle-icon .tri-up { border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 6px solid #cbd5e1; margin-bottom: 2px; }
-  .sort-triangle-icon .tri-down { border-left: 6px solid transparent; border-right: 6px solid transparent; border-top: 6px solid #cbd5e1; }
+  .sort-triangle-icon .tri-up { border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 4px solid #cbd5e1; margin-bottom: 2px; }
+  .sort-triangle-icon .tri-down { border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 4px solid #cbd5e1; }
   .sortable-th.sort-asc .tri-up { border-bottom-color: #2563eb; }
   .sortable-th.sort-asc .tri-down { border-top-color: #cbd5e1; }
   .sortable-th.sort-desc .tri-down { border-top-color: #2563eb; }
@@ -2492,7 +2493,7 @@ P._renderSortTh = (label, key) => {
   let cls = 'sortable-th';
   if(active && st.dir === 'desc') cls += ' active sort-desc';
   else if(active && st.dir === 'asc') cls += ' active sort-asc';
-  return '<th class="' + cls + '" data-content-sort="' + key + '"><span>' + label + '</span><span class="sort-triangle-icon"><i class="tri-up"></i><i class="tri-down"></i></span></th>';
+  return '<th class="' + cls + '" data-content-sort="' + key + '"><span class="th-inner"><span>' + label + '</span><span class="sort-triangle-icon"><i class="tri-up"></i><i class="tri-down"></i></span></span></th>';
 };
 
 P._applyTableSort = (filtered) => {
@@ -4115,12 +4116,12 @@ P._importXiaohongshuData = () => {
     const colTitle = P._findCol(header, titleCandidates);
     const colDate = P._findCol(header, dateCandidates);
     const colLink = P._findCol(header, linkCandidates);
-    const colViews = P._findCol(header, ['观看数','播放量','浏览量','阅读量','views']);
-    const colExposure = P._findCol(header, ['曝光','曝光量','展现','展现量','exposure']);
-    const colLikes = P._findCol(header, ['点赞','点赞数','likes']);
-    const colComments = P._findCol(header, ['评论','评论数','comments']);
-    const colFavorites = P._findCol(header, ['收藏','收藏数','favorites']);
-    const colShares = P._findCol(header, ['分享','分享数','shares']);
+    const colViews = P._findCol(header, ['观看数','观看量','播放量','播放数','浏览量','浏览数','阅读量','阅读数','浏览次数','观看次数','views','view']);
+    const colExposure = P._findCol(header, ['曝光','曝光数','曝光量','展现','展现数','展现量','展示','展示数','展示量','impression','impressions','exposure']);
+    const colLikes = P._findCol(header, ['点赞','点赞数','点赞量','likes','like']);
+    const colComments = P._findCol(header, ['评论','评论数','评论量','comments','comment']);
+    const colFavorites = P._findCol(header, ['收藏','收藏数','收藏量','favorites','favorite','collect','collections']);
+    const colShares = P._findCol(header, ['分享','分享数','分享量','shares','share','转发','转发数']);
 
     console.log('小红书导入表头（第' + (headerRowIdx+1) + '行）：', header);
     console.log('识别到的列：', { colTitle, colLink, colDate, colViews, colExposure, colLikes, colComments, colFavorites, colShares });
