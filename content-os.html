@@ -1720,14 +1720,51 @@ P._hotspotFilter = 'all';
 P._hotspotPlatform = 'all';
 P._hotspotSearch = '';
 
+P._hotspotReadLocal = () => {
+  try {
+    const raw = localStorage.getItem(P._HOTSPOT_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch(e) {
+    console.warn('热点本地数据读取失败', e);
+    return [];
+  }
+};
+
+P._hotspotSyncToCloud = (items) => {
+  const safeItems = Array.isArray(items) ? items : [];
+  try {
+    if(S?.db?.config) S.db.config.hotspots = safeItems;
+    if(window.SUPABASE) {
+      SUPABASE.from('config')
+        .upsert({ key:'hotspots', value:safeItems })
+        .then(({ error }) => { if(error) console.warn('热点云端保存失败：', error.message); });
+    }
+  } catch(e) {
+    console.warn('热点云端保存异常', e);
+  }
+};
+
 P._hotspotLoad = () => {
-  try { return JSON.parse(localStorage.getItem(P._HOTSPOT_STORAGE_KEY) || '[]'); }
-  catch(e) { console.warn('热点数据读取失败', e); return []; }
+  const localItems = P._hotspotReadLocal();
+  const cloudItems = S?.db?.config?.hotspots;
+  if(Array.isArray(cloudItems) && cloudItems.length) {
+    // 云端有数据时优先用 Supabase 配置中的热点，避免换文件/换浏览器后丢失。
+    try { localStorage.setItem(P._HOTSPOT_STORAGE_KEY, JSON.stringify(cloudItems)); } catch(_) {}
+    return cloudItems;
+  }
+  // 如果当前浏览器有旧版 localStorage 热点，但云端还没有，自动迁移到 Supabase config。
+  if(localItems.length && S?.db?.config && (!Array.isArray(cloudItems) || cloudItems.length === 0)) {
+    P._hotspotSyncToCloud(localItems);
+  }
+  return Array.isArray(cloudItems) ? cloudItems : localItems;
 };
 
 P._hotspotSave = (items) => {
-  try { localStorage.setItem(P._HOTSPOT_STORAGE_KEY, JSON.stringify(items || [])); }
-  catch(e) { UI.toast('热点保存失败：' + e.message, 'error'); }
+  const safeItems = Array.isArray(items) ? items : [];
+  try { localStorage.setItem(P._HOTSPOT_STORAGE_KEY, JSON.stringify(safeItems)); }
+  catch(e) { UI.toast('热点本地保存失败：' + e.message, 'error'); }
+  P._hotspotSyncToCloud(safeItems);
 };
 
 P._hotspotGetConfig = () => {
@@ -3279,6 +3316,182 @@ P._renderMetricHistoryPanel = (c) => {
   </div>`;
 };
 
+
+// --- 单篇内容增长趋势弹窗 ---
+P._trendMetric = 'views';
+P._trendMetricLabels = { views:'观看量', exposure:'曝光', likes:'点赞', comments:'评论', favorites:'收藏', shares:'分享' };
+P._trendMetricColors = { views:'#2563eb', exposure:'#3b82f6', likes:'#ec4899', comments:'#10b981', favorites:'#8b5cf6', shares:'#f59e0b' };
+P._trendHistory = (c) => {
+  const history = P._metricHistory(c).map(s => ({...s}));
+  if(history.length === 0) {
+    history.push(P._metricSnapshotFrom(c.metrics || {}, { importedAt: c.metrics?.dataUpdatedAt || c.updatedAt || c.createdAt || H.nowISO(), source:'current' }));
+  }
+  history.sort((a,b) => String(a.importedAt||'').localeCompare(String(b.importedAt||'')));
+  return history;
+};
+P._trendDeltaFromHistory = (history, key) => {
+  if(history.length < 2) return null;
+  const last = history[history.length - 1] || {};
+  const prev = history[history.length - 2] || {};
+  return P._metricNumber(last[key]) - P._metricNumber(prev[key]);
+};
+P._trendSourceLabel = (source) => {
+  if(!source) return '记录';
+  if(source === 'xhs_import') return '小红书导入';
+  if(source === 'manual_edit') return '手动编辑';
+  if(source === 'current') return '当前数据';
+  if(String(source).includes('_before')) return '导入前';
+  return source;
+};
+P._renderTrendChart = (history, key, contentId) => {
+  const label = P._trendMetricLabels[key] || key;
+  const color = P._trendMetricColors[key] || '#2563eb';
+  if(history.length < 2) {
+    return `<div class="h-72 rounded-2xl bg-gray-50 border border-dashed border-gray-200 flex flex-col items-center justify-center text-center">
+      <div class="text-3xl mb-2">📈</div>
+      <div class="text-sm font-medium text-gray-700">暂无增长趋势</div>
+      <div class="text-xs text-gray-400 mt-1">导入小红书数据 2 次以上后，就能看到这篇内容的走势。</div>
+    </div>`;
+  }
+  const values = history.map(s => P._metricNumber(s[key]));
+  const maxV = Math.max(1, ...values);
+  const minV = Math.min(...values);
+  const range = Math.max(1, maxV - minV);
+  const W = 900, Hh = 300, padL = 54, padR = 24, padT = 28, padB = 42;
+  const w = W - padL - padR, h = Hh - padT - padB;
+  const xAt = (i) => padL + (history.length === 1 ? 0 : (i/(history.length-1))*w);
+  const yAt = (v) => padT + h - ((v - minV) / range) * h;
+  const pts = values.map((v,i)=>[xAt(i), yAt(v)]);
+  const path = pts.map((p,i)=>(i?'L':'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+  const baseY = padT + h;
+  const area = `${path} L ${xAt(history.length-1).toFixed(1)},${baseY.toFixed(1)} L ${xAt(0).toFixed(1)},${baseY.toFixed(1)} Z`;
+  const grid = [0,0.25,0.5,0.75,1].map(r => {
+    const y = padT + h * r;
+    const val = Math.round(maxV - (maxV-minV)*r);
+    return `<g><line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}" stroke="#eef2f7" stroke-dasharray="4 4"/><text x="12" y="${(y+4).toFixed(1)}" font-size="11" fill="#94a3b8">${H.fmtNum(val)}</text></g>`;
+  }).join('');
+  const circles = pts.map((p,i)=>`<g><circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="4" fill="#fff" stroke="${color}" stroke-width="2"/><title>${H.fmtDateTime(history[i].importedAt)}｜${label} ${H.fmtNum(values[i])}</title></g>`).join('');
+  const labelEvery = Math.max(1, Math.ceil(history.length / 6));
+  const xLabels = history.map((s,i)=>{
+    if(i !== 0 && i !== history.length-1 && i % labelEvery !== 0) return '';
+    const d = H.parseDate(s.importedAt) || String(s.importedAt || '').slice(0,10);
+    const txt = d ? d.slice(5).replace('-', '/') : (i+1);
+    return `<text x="${xAt(i).toFixed(1)}" y="${(Hh-14)}" text-anchor="middle" font-size="11" fill="#94a3b8">${H.esc(txt)}</text>`;
+  }).join('');
+  const gradId = 'trendGrad_' + String(contentId||'c').replace(/[^a-zA-Z0-9_]/g,'') + '_' + key;
+  return `<div class="rounded-2xl border border-gray-100 bg-white p-4">
+    <div class="flex items-center justify-between mb-2">
+      <div><div class="text-sm font-semibold text-gray-800">${label}趋势</div><div class="text-xs text-gray-400 mt-0.5">按每次导入/编辑记录生成</div></div>
+      <div class="text-right"><div class="text-lg font-bold text-gray-900">${H.fmtNum(values[values.length-1])}</div><div class="text-xs text-gray-400">当前${label}</div></div>
+    </div>
+    <svg width="100%" viewBox="0 0 ${W} ${Hh}" class="block">
+      <defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity="0.24"/><stop offset="100%" stop-color="${color}" stop-opacity="0.03"/></linearGradient></defs>
+      ${grid}
+      <path d="${area}" fill="url(#${gradId})" stroke="none"/>
+      <path d="${path}" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      ${circles}
+      ${xLabels}
+    </svg>
+  </div>`;
+};
+P._renderContentTrendModal = (c, activeKey) => {
+  const history = P._trendHistory(c);
+  const latest = history[history.length - 1] || {};
+  const lastTime = latest.importedAt || c.metrics?.dataUpdatedAt || c.updatedAt || '';
+  const cover = H.getCoverImage(c);
+  const metricTabs = P._metricKeys.map(k => `<button class="cos-btn cos-btn-xs ${activeKey===k?'cos-btn-primary':'cos-btn-secondary'}" data-trend-metric="${k}" data-content-id="${H.esc(c.id)}">${P._trendMetricLabels[k]}</button>`).join('');
+  const metricCards = P._metricKeys.map(k => {
+    const val = P._metricNumber(c.metrics?.[k]);
+    const d = P._trendDeltaFromHistory(history, k);
+    const deltaHtml = d == null ? '<span class="text-[11px] text-gray-300">暂无对比</span>' : (d === 0 ? '<span class="text-[11px] text-gray-400">较上次 0</span>' : `<span class="text-[11px] font-semibold ${d>0?'text-emerald-600':'text-red-500'}">较上次 ${d>0?'+':''}${H.fmtNum(d)}</span>`);
+    return `<div class="rounded-xl border ${activeKey===k?'border-blue-300 bg-blue-50/60':'border-gray-100 bg-gray-50/50'} p-3 cursor-pointer" data-trend-metric="${k}" data-content-id="${H.esc(c.id)}">
+      <div class="text-xs text-gray-400">${P._trendMetricLabels[k]}</div>
+      <div class="text-xl font-bold text-gray-900 mt-1 tabular-nums">${H.fmtNum(val)}</div>
+      <div class="mt-1">${deltaHtml}</div>
+    </div>`;
+  }).join('');
+  const tableRows = [...history].reverse().map((s, idx, arr) => {
+    const prev = history[history.length - 1 - idx - 1] || null;
+    const source = P._trendSourceLabel(s.source);
+    const cell = (k) => {
+      const v = P._metricNumber(s[k]);
+      const d = prev ? v - P._metricNumber(prev[k]) : null;
+      return `<td class="font-mono text-gray-700 whitespace-nowrap">${H.fmtNum(v)} ${P._renderMetricDelta(d)}</td>`;
+    };
+    return `<tr>
+      <td class="text-xs text-gray-500 whitespace-nowrap">${H.fmtDateTime(s.importedAt)}</td>
+      <td class="text-xs text-gray-400 whitespace-nowrap">${H.esc(source)}${s.fileName?' · '+H.esc(s.fileName):''}</td>
+      ${P._metricKeys.map(cell).join('')}
+    </tr>`;
+  }).join('');
+  return `<div class="p-6">
+    <h3>增长趋势</h3>
+    <div class="flex items-start gap-4 mb-5">
+      ${cover?`<img src="${cover}" class="w-16 h-16 rounded-xl object-cover border border-gray-100">`:`<div class="w-16 h-16 rounded-xl bg-gray-100 flex items-center justify-center text-gray-400 text-xs">暂无封面</div>`}
+      <div class="min-w-0 flex-1">
+        <div class="text-base font-semibold text-gray-900 truncate">${H.esc(c.title||'-')}</div>
+        <div class="flex flex-wrap items-center gap-2 mt-2 text-xs text-gray-400">
+          <span class="cos-tag">${H.esc(c.platform||'-')}</span><span>${H.showDate(c.publishDate)}</span><span>最近更新：${lastTime ? H.fmtDateTime(lastTime) : '-'}</span><span>记录 ${history.length} 次</span>
+        </div>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-5">${metricCards}</div>
+    <div class="flex flex-wrap items-center gap-2 mb-3"><span class="text-xs text-gray-400 mr-1">查看指标</span>${metricTabs}</div>
+    ${P._renderTrendChart(history, activeKey, c.id)}
+    <div class="mt-5 rounded-2xl border border-gray-100 overflow-hidden">
+      <div class="px-4 py-3 bg-gray-50 flex items-center justify-between"><div class="text-sm font-semibold text-gray-700">历史数据明细</div><div class="text-xs text-gray-400">最新记录在上</div></div>
+      <div class="overflow-x-auto"><table class="cos-table"><thead><tr><th>更新时间</th><th>来源</th>${P._metricKeys.map(k=>`<th>${P._trendMetricLabels[k]}</th>`).join('')}</tr></thead><tbody>${tableRows || `<tr><td colspan="8" class="text-center text-gray-400 py-6">暂无记录</td></tr>`}</tbody></table></div>
+    </div>
+  </div>`;
+};
+P._replaceTrendModalContent = (contentId, metricKey) => {
+  const c = S.contents.get(contentId);
+  if(!c) return;
+  const key = P._metricKeys.includes(metricKey) ? metricKey : 'views';
+  P._trendMetric = key;
+  const box = document.getElementById('modal-box');
+  if(!box || document.getElementById('modal-overlay')?.classList.contains('hidden')) {
+    P._openContentTrendModal(contentId, key);
+    return;
+  }
+  let html = P._renderContentTrendModal(c, key);
+  let titleHtml = ''; let bodyHtml = html;
+  const hMatch = html.match(/<h([23])\b[^>]*>(.*?)<\/h\1>/s);
+  if(hMatch) {
+    titleHtml = hMatch[0];
+    bodyHtml = html.replace(hMatch[0], '');
+  }
+  const titleText = titleHtml.replace(/<[^>]+>/g, '').trim() || '增长趋势';
+  const headerBar = `<div class="flex items-center justify-between px-6 py-3 border-b border-gray-100 shrink-0">
+    <div class="text-[17px] font-semibold text-gray-900 truncate pr-4">${H.esc(titleText)}</div>
+    <button class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors shrink-0" id="modal-close-x" title="关闭" style="font-size:18px;line-height:1">&times;</button>
+  </div>`;
+  box.innerHTML = headerBar + bodyHtml;
+  const xBtn = box.querySelector('#modal-close-x');
+  if(xBtn) xBtn.onclick = () => UI.closeModal(null);
+  P._bindTrendModalEvents();
+};
+
+P._bindTrendModalEvents = () => {
+  document.querySelectorAll('[data-trend-metric]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const cid = btn.dataset.contentId;
+      const key = btn.dataset.trendMetric || 'views';
+      P._replaceTrendModalContent(cid, key);
+    };
+  });
+};
+P._openContentTrendModal = (contentId, metricKey) => {
+  const c = S.contents.get(contentId);
+  if(!c) return;
+  const key = P._metricKeys.includes(metricKey) ? metricKey : (P._metricKeys.includes(P._trendMetric) ? P._trendMetric : 'views');
+  P._trendMetric = key;
+  UI.openModal(P._renderContentTrendModal(c, key), { width:'max-w-6xl' });
+  setTimeout(P._bindTrendModalEvents, 0);
+};
+
 P._renderSortTh = (label, key) => {
   const st = P._contentTableSort;
   const active = st.key === key;
@@ -3516,6 +3729,7 @@ P.renderContents = (containerId) => {
         <td class="text-xs text-gray-600 font-mono tabular-nums">${P._renderMetricCell(c,'shares','data-metric-edit="'+H.esc(c.id)+'" data-metric-field="shares"')}</td>
         <td class="text-xs text-gray-600 font-mono tabular-nums"><span class="cos-inline-edit" data-metric-edit="${H.esc(c.id)}" data-metric-field="adCost" contenteditable="true">${P._metricNumber(c.metrics?.adCost)}</span></td>
         <td><div class="flex gap-0.5">
+          <button class="cos-btn cos-btn-ghost cos-btn-xs" data-content-trend="${c.id}" title="增长趋势">📈</button>
           <button class="cos-btn cos-btn-ghost cos-btn-xs" data-edit-content="${c.id}">✏️</button>
           <button class="cos-btn cos-btn-ghost cos-btn-xs" data-delete-content="${c.id}">🗑️</button>
         </div></td></tr>`;
@@ -3669,8 +3883,9 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
     };
   });
 
-  // 查看/编辑/删除
+  // 查看/趋势/编辑/删除
   document.querySelectorAll('[data-view-content]').forEach(b=>{b.onclick=()=>P._openContentDrawer(b.dataset.viewContent);});
+  document.querySelectorAll('[data-content-trend]').forEach(b=>{b.onclick=(e)=>{e.stopPropagation(); P._openContentTrendModal(b.dataset.contentTrend);};});
   document.querySelectorAll('[data-edit-content]').forEach(b=>{b.onclick=()=>P._openContentEditModal(b.dataset.editContent);});
   document.querySelectorAll('[data-delete-content]').forEach(b=>{
     b.onclick=async()=>{const c=await UI.confirm('删除内容','确定删除这条内容？选题不会被删除。',{danger:true,confirmText:'删除'});if(c){await S.contents.remove(b.dataset.deleteContent);UI.toast('内容已删除');P._resetPage();P.renderContents();}};
@@ -3711,7 +3926,7 @@ P._openContentDrawer = (contentId) => {
         ${(()=>{const img=H.getCoverImage(c);return img?`<div><span class="text-xs text-gray-400">封面图</span><div class="mt-1"><img src="${img}" class="img-preview"></div></div>`:'';})()}
         ${c.publishScreenshot && (c.publishScreenshot.startsWith('data:') || c.publishScreenshot.startsWith('http')) ? `<div><span class="text-xs text-gray-400">发布截图</span><div class="mt-1"><img src="${c.publishScreenshot}" class="img-preview"></div></div>`:''}
         <div class="border-t pt-4 mt-4">
-          <h3 class="text-sm font-semibold text-gray-700 mb-3">📊 运营数据</h3>
+          <div class="flex items-center justify-between mb-3"><h3 class="text-sm font-semibold text-gray-700">📊 运营数据</h3><button class="cos-btn cos-btn-secondary cos-btn-xs" data-content-trend="${H.esc(c.id)}">📈 增长趋势</button></div>
           <div class="grid grid-cols-4 gap-3">
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">曝光</div><div class="text-sm font-semibold mt-1">${P._renderMetricReadonly(c,'exposure')}</div></div>
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">点赞</div><div class="text-sm font-semibold mt-1">${P._renderMetricReadonly(c,'likes')}</div></div>
@@ -3728,6 +3943,16 @@ P._openContentDrawer = (contentId) => {
       </div>
     </div>`;
   UI.openDrawer(html);
+  setTimeout(()=>{
+    document.querySelectorAll('#drawer-box [data-content-trend]').forEach(b=>{
+      b.onclick=(e)=>{
+        e.stopPropagation();
+        const cid = b.dataset.contentTrend;
+        UI.closeDrawer();
+        setTimeout(() => P._openContentTrendModal(cid), 40);
+      };
+    });
+  },0);
 };
 
 // ==================== 内容编辑 Modal ====================
@@ -5962,7 +6187,7 @@ P.renderAnalytics = () => {
     sorted.forEach((c,i)=>{
       html += `<tr>
         <td class="text-xs font-bold ${i<3?'text-amber-500':'text-gray-400'}">${i+1}</td>
-        <td class="cos-td-title"><div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900">${H.esc(H.truncate(c.title,20))}</span><span class="title-tooltip-text">${H.esc(c.title)}</span></div></td>
+        <td class="cos-td-title"><div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900 hover:text-blue-600 cursor-pointer" data-content-trend="${H.esc(c.id)}" title="查看增长趋势">${H.esc(H.truncate(c.title,20))}</span><span class="title-tooltip-text">点击查看增长趋势：${H.esc(c.title)}</span></div></td>
         <td><span class="cos-tag">${H.esc(c.platform)}</span></td>
         <td class="text-xs text-gray-400 whitespace-nowrap">${c.publishDate||'-'}</td>
         <td class="text-xs text-gray-600 font-mono">${H.fmtNum(m(c).exposure)}</td>
@@ -6085,7 +6310,7 @@ P.renderAnalytics = () => {
   html += '<div class="grid grid-cols-2 gap-4 mb-6">';
   html += '<div class="cos-card p-5 border-l-4 border-green-400"><h3 class="text-sm font-semibold text-gray-700 mb-3">🌟 本月最佳内容</h3>';
   if(best) {
-    html += `<div class="text-sm font-medium text-gray-800">${H.esc(best.title)}</div>
+    html += `<div class="text-sm font-medium text-gray-800 hover:text-blue-600 cursor-pointer" data-content-trend="${H.esc(best.id)}" title="查看增长趋势">${H.esc(best.title)}</div>
       <div class="flex items-center gap-2 mt-1 text-xs text-gray-400"><span class="cos-tag">${H.esc(best.platform)}</span><span>${best.publishDate}</span></div>
       <div class="grid grid-cols-3 gap-2 mt-3 text-center">
         <div><div class="text-lg font-bold text-blue-600">${H.fmtNum(m(best).exposure)}</div><div class="text-xs text-gray-400">曝光</div></div>
@@ -6097,7 +6322,7 @@ P.renderAnalytics = () => {
 
   html += '<div class="cos-card p-5 border-l-4 border-red-300"><h3 class="text-sm font-semibold text-gray-700 mb-3">🔧 本月待优化内容</h3>';
   if(worst) {
-    html += `<div class="text-sm font-medium text-gray-800">${H.esc(worst.title)}</div>
+    html += `<div class="text-sm font-medium text-gray-800 hover:text-blue-600 cursor-pointer" data-content-trend="${H.esc(worst.id)}" title="查看增长趋势">${H.esc(worst.title)}</div>
       <div class="flex items-center gap-2 mt-1 text-xs text-gray-400"><span class="cos-tag">${H.esc(worst.platform)}</span><span>${worst.publishDate}</span></div>
       <div class="grid grid-cols-3 gap-2 mt-3 text-center">
         <div><div class="text-lg font-bold text-gray-600">${H.fmtNum(m(worst).exposure)}</div><div class="text-xs text-gray-400">曝光</div></div>
@@ -6116,6 +6341,9 @@ P.renderAnalytics = () => {
   });
   document.querySelectorAll('[data-analytics-sort]').forEach(b=>{
     b.onclick=()=>{ P._analyticsSort=b.dataset.analyticsSort; P.renderAnalytics(); };
+  });
+  document.querySelectorAll('[data-content-trend]').forEach(b=>{
+    b.onclick=(e)=>{ e.stopPropagation(); P._openContentTrendModal(b.dataset.contentTrend); };
   });
 };
 
