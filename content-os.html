@@ -327,11 +327,6 @@ H.parseDate = (v) => {
     const d = new Date(ms);
     if(!isNaN(d.getTime())) return d.toISOString().slice(0,10);
   }
-  // 小红书中文日期: "2026年07月05日19时45分02秒" → 2026-07-05
-  if(typeof v === 'string') {
-    const cnMatch = v.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-    if(cnMatch) return cnMatch[1] + '-' + cnMatch[2].padStart(2,'0') + '-' + cnMatch[3].padStart(2,'0');
-  }
   // 字符串尝试 Date 解析
   if(typeof v === 'string') {
     const parts = v.split(/[\/\-\sT]/);
@@ -4033,6 +4028,15 @@ P._normalizeHeader = (h) => {
     .replace(/[：:（）()【】\[\]_\-\/\\]/g, '');
 };
 
+// 导入日期解析：兼容「2026年07月05日19时45分02秒」这类小红书导出格式
+P._parseImportDate = (v) => {
+  if(v === null || v === undefined || v === '') return '';
+  const s = String(v).trim();
+  const cn = s.match(/(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日/);
+  if(cn) return cn[1] + '-' + cn[2].padStart(2, '0') + '-' + cn[3].padStart(2, '0');
+  return H.parseDate(s) || s;
+};
+
 // 字段兼容映射：返回命中的列索引（双向 contains 匹配，标准化后比较）
 P._findCol = (header, candidates) => {
   const normH = header.map(P._normalizeHeader);
@@ -4041,6 +4045,7 @@ P._findCol = (header, candidates) => {
     const h = normH[i];
     if(!h) continue;
     for(const c of normC) {
+      if(!c) continue;
       if(h === c || h.includes(c) || c.includes(h)) return i;
     }
   }
@@ -4090,65 +4095,70 @@ P._importXiaohongshuData = () => {
 
     if(rows.length < 2) { UI.toast('文件为空或无表头','error'); return; }
 
-    const titleCandidates = ['标题','笔记标题','作品标题','内容标题','笔记名称','作品名称','内容名称','标题名称','笔记','作品','title','noteTitle','note_title','name'];
+    const titleCandidates = ['标题','笔记标题','作品标题','内容标题','笔记名称','作品名称','内容名称','标题名称','笔记名称标题','作品名称标题','noteTitle','note_title','title','name'];
     const linkCandidates = ['链接','笔记链接','内容链接','作品链接','笔记地址','作品地址','笔记URL','作品URL','url链接','url','link'];
-    const dateCandidates = ['发布时间','首次发布时间','发布日期','日期','发布时刻','创建时间','笔记发布时间','作品发布时间','publishDate','publish_date','date','createdAt'];
+    const dateCandidates = ['首次发布时间','发布时间','发布日期','日期','发布时刻','创建时间','笔记发布时间','作品发布时间','publishDate','publish_date','date','createdAt'];
+    const viewsCandidates = ['观看数','观看量','播放量','播放数','浏览量','浏览数','阅读量','阅读数','浏览次数','观看次数','播放次数','views','view'];
+    const exposureCandidates = ['曝光','曝光数','曝光量','展现','展现数','展现量','展示','展示数','展示量','impression','impressions','exposure'];
+    const likesCandidates = ['点赞','点赞数','点赞量','赞','赞数','likes','like'];
+    const commentsCandidates = ['评论','评论数','评论量','留言','留言数','comments','comment'];
+    const favoritesCandidates = ['收藏','收藏数','收藏量','收藏人数','favorites','favorite','collect','collects','collections'];
+    const sharesCandidates = ['分享','分享数','分享量','转发','转发数','shares','share'];
 
-    // 所有数据指标候选（用于表头行命中评分）
-    const allMetricCandidates = [
-      '观看量','观看数','播放量','播放数','浏览量','浏览数','阅读量','阅读数',
-      '曝光','曝光数','曝光量','展现','展现数','展现量','展示','展示数',
-      '点赞','点赞数','点赞量','赞',
-      '评论','评论数','评论量','留言',
-      '收藏','收藏数','收藏量',
-      '分享','分享数','分享量','转发'
-    ];
-
-    // 扫描前 10 行，用命中得分找最优表头行（跳过说明行）
-    let headerRowIdx = 0; // 默认第1行
+    // 扫描前 10 行找最像表头的那一行
+    // 小红书文件第一行可能是「最多导出排序后前1000条笔记」这类说明行，不能直接拿 rows[0] 当表头。
+    // 这里按命中字段数量打分，选得分最高的行作为表头。
+    let headerRowIdx = -1;
     let header = [];
-    let bestScore = 0;
+    let bestHeaderScore = 0;
     const scanRows = Math.min(rows.length, 10);
     for(let i = 0; i < scanRows; i++) {
       const trial = rows[i].map(h => String(h||'').trim());
-      // 跳过空行和明显的说明行
-      const joined = trial.join('').trim();
-      if(!joined || /最多导出|排序后前\d+条|数据更新时间|导出时间|以下为/.test(joined)) continue;
+      const nonEmpty = trial.filter(h => h !== '');
+      const uniqueCount = new Set(nonEmpty).size;
+      if(nonEmpty.length === 0 || uniqueCount <= 1) continue; // 跳过说明行 / 合并说明行
+
+      const t = P._findCol(trial, titleCandidates);
+      const l = P._findCol(trial, linkCandidates);
+      const d = P._findCol(trial, dateCandidates);
+      const v = P._findCol(trial, viewsCandidates);
+      const e = P._findCol(trial, exposureCandidates);
+      const lk = P._findCol(trial, likesCandidates);
+      const cm = P._findCol(trial, commentsCandidates);
+      const fav = P._findCol(trial, favoritesCandidates);
+      const sh = P._findCol(trial, sharesCandidates);
+
       let score = 0;
-      for(const mc of allMetricCandidates) {
-        const idx = P._findCol(trial, [mc]);
-        if(idx >= 0) score++;
-      }
-      // 标题/日期/链接 各算1分
-      if(P._findCol(trial, titleCandidates) >= 0) score++;
-      if(P._findCol(trial, dateCandidates) >= 0) score++;
-      if(P._findCol(trial, linkCandidates) >= 0) score++;
-      if(score > bestScore) {
-        bestScore = score;
+      if(t >= 0) score += 5;
+      if(l >= 0) score += 4;
+      if(d >= 0) score += 3;
+      [v, e, lk, cm, fav, sh].forEach(idx => { if(idx >= 0) score += 2; });
+
+      if(score > bestHeaderScore) {
+        bestHeaderScore = score;
         headerRowIdx = i;
         header = trial;
       }
     }
 
-    // 如果第0行得分不够，且都没找到，保留 headerRowIdx=0 兜底
-    if(bestScore < 2) {
-      header = rows[0].map(h => String(h||'').trim());
-      console.log('小红书导入表头识别得分不足，兜底使用第1行');
+    if(headerRowIdx < 0 || bestHeaderScore < 5) {
+      console.log('小红书导入表头识别失败，前10行：', rows.slice(0, 10));
+      UI.toast('未识别到表头：请确认表格中包含标题、链接或发布时间列','error');
+      return;
     }
-
-    console.log('小红书导入最终表头行：' + headerRowIdx + '（得分：' + bestScore + '）', header);
 
     // 字段定位
     const colTitle = P._findCol(header, titleCandidates);
     const colDate = P._findCol(header, dateCandidates);
     const colLink = P._findCol(header, linkCandidates);
-    const colViews = P._findCol(header, ['观看数','观看量','播放量','播放数','浏览量','浏览数','阅读量','阅读数','浏览次数','观看次数','播放次数','views','view']);
-    const colExposure = P._findCol(header, ['曝光','曝光数','曝光量','展现','展现数','展现量','展示','展示数','展示量','impression','impressions','exposure']);
-    const colLikes = P._findCol(header, ['点赞','点赞数','点赞量','赞','赞数','likes','like']);
-    const colComments = P._findCol(header, ['评论','评论数','评论量','留言','留言数','comments','comment']);
-    const colFavorites = P._findCol(header, ['收藏','收藏数','收藏量','收藏人数','favorites','favorite','collect','collects','collections']);
-    const colShares = P._findCol(header, ['分享','分享数','分享量','转发','转发数','shares','share']);
+    const colViews = P._findCol(header, viewsCandidates);
+    const colExposure = P._findCol(header, exposureCandidates);
+    const colLikes = P._findCol(header, likesCandidates);
+    const colComments = P._findCol(header, commentsCandidates);
+    const colFavorites = P._findCol(header, favoritesCandidates);
+    const colShares = P._findCol(header, sharesCandidates);
 
+    console.log('小红书导入表头（第' + (headerRowIdx+1) + '行）：', header);
     console.log('识别到的列：', { colTitle, colLink, colDate, colViews, colExposure, colLikes, colComments, colFavorites, colShares });
 
     if(colTitle < 0 && colLink < 0 && colDate < 0) {
@@ -4166,7 +4176,7 @@ P._importXiaohongshuData = () => {
       const title = (colTitle >= 0 ? String(r[colTitle]||'').trim() : '');
       const link = (colLink >= 0 ? String(r[colLink]||'').trim() : '');
       const rawDate = colDate >= 0 ? String(r[colDate]||'').trim() : '';
-      const date = H.parseDate(rawDate) || rawDate;
+      const date = P._parseImportDate(rawDate);
       if(!title && !link) continue;
 
       imported.push({
@@ -4212,7 +4222,7 @@ P._importXiaohongshuData = () => {
         const normTitle = P._normalizeTitle(imp.title);
         for(const c of contents) {
           if(matchedContentIds.has(c.id)) continue;
-          if(String(c.platform||'').toLowerCase().includes('小红书') || String(c.platform||'').toLowerCase().includes('xiaohongshu')) {
+          if((c.platform||'').toLowerCase().includes('小红书') || (c.platform||'').toLowerCase().includes('xiaohongshu')) {
             if(P._normalizeTitle(c.title||'') === normTitle) {
               best = c; bestType = '标题+平台匹配'; break;
             }
@@ -4225,7 +4235,7 @@ P._importXiaohongshuData = () => {
         const normTitle = P._normalizeTitle(imp.title);
         for(const c of contents) {
           if(matchedContentIds.has(c.id)) continue;
-          if(String(c.platform||'').toLowerCase().includes('小红书') || String(c.platform||'').toLowerCase().includes('xiaohongshu')) {
+          if((c.platform||'').toLowerCase().includes('小红书') || (c.platform||'').toLowerCase().includes('xiaohongshu')) {
             if(P._normalizeTitle(c.title||'') === normTitle && c.publishDate === imp.date) {
               best = c; bestType = '标题+日期+平台匹配'; break;
             }
