@@ -98,6 +98,20 @@
 
   /* === 图片预览 === */
   .img-thumb { width:40px; height:40px; border-radius:6px; object-fit:cover; border:1px solid #f1f5f9; }
+
+  /* === 表格排序图标 === */
+  .sortable-th { cursor: pointer; user-select: none; white-space: nowrap; }
+  .sortable-th:hover { color: #1e40af; }
+  .sortable-th.active { color: #2563eb; }
+  .sort-icon { display: inline-flex; flex-direction: column; vertical-align: middle; margin-left: 3px; line-height: 1; gap: -1px; }
+  .sort-icon i { display: block; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; }
+  .sort-up { border-bottom: 4px solid #cbd5e1; margin-bottom: 1px; }
+  .sort-down { border-top: 4px solid #cbd5e1; }
+  .sort-none .sort-up, .sort-none .sort-down { border-color: #cbd5e1; }
+  .sort-desc .sort-down { border-top-color: #2563eb; }
+  .sort-desc .sort-up { border-bottom-color: #cbd5e1; }
+  .sort-asc .sort-up { border-bottom-color: #2563eb; }
+  .sort-asc .sort-down { border-top-color: #cbd5e1; }
   .img-preview { max-width:100%; max-height:200px; border-radius:8px; border:1px solid #f1f5f9; }
 </style>
 <!-- Tailwind CDN 必须在 XLSX 之前加载，XLSX 用 defer 避免阻塞渲染 -->
@@ -1107,10 +1121,10 @@ S.publishTopic = async (topicId, publishData) => {
     updatedAt: H.nowISO()
   };
   await S.contents.add(content);
-  S.topics.update(topicId, { status:'published' });
+  await S.topics.update(topicId, { status:'published' });
   // 如果是从灵感转来的，更新灵感状态
   const insp = S.inspirations.all().find(i=>i.convertedTopicId===topicId);
-  if(insp) S.inspirations.update(insp.id, { status:'converted' });
+  if(insp) await S.inspirations.update(insp.id, { status:'converted' });
   return content;
 };
 
@@ -1799,7 +1813,7 @@ P._resetTopicPage = () => { P._topicPage = 1; };
 
 P.renderTopics = (containerId) => {
   const target = containerId||'page-body';
-  const topics = S.topics.all();
+  const topics = S.topics.all().filter(t => t.status !== 'published');
   const themes = S.config.getThemes();
   const formats = S.config.getFormats();
   const hooks = S.config.getHooks();
@@ -1824,10 +1838,11 @@ P.renderTopics = (containerId) => {
   if(topics.length===0) {
     html += UI.emptyState('还没有选题，开始规划你的内容吧', '<button class="cos-btn cos-btn-primary cos-btn-sm" data-add-topic>新增选题</button>');
   } else if(P._topicTab==='kanban') {
-    // 看板：固定列宽210px，横向滚动
-    const colColors = {todo:'border-t-gray-300',in_progress:'border-t-blue-400',pending_publish:'border-t-amber-400',published:'border-t-green-400',discarded:'border-t-red-400'};
+    // 看板：固定列宽210px，横向滚动（不显示已发布列，已发布选题在内容库查看）
+    const colColors = {todo:'border-t-gray-300',in_progress:'border-t-blue-400',pending_publish:'border-t-amber-400',discarded:'border-t-red-400'};
+    const kanbanStatuses = C.TOPIC_STATUSES.filter(s => s !== 'published');
     html += `<div class="flex gap-3 overflow-x-auto pb-4" style="min-height:350px">`;
-    C.TOPIC_STATUSES.forEach(status=>{
+    kanbanStatuses.forEach(status=>{
       const items = topics.filter(t=>t.status===status);
       html += `<div class="flex-shrink-0" style="width:210px">
         <div class="flex items-center justify-between mb-2 px-1">
@@ -2338,11 +2353,23 @@ P._openPublishModal = async (topicId) => {
         if(pickBtn) pickBtn.textContent='选择图片';
       };
     });
+    const btnOrigText = isFromLink ? '🚀 一键发布' : '确认发布';
     document.getElementById('publish-save-btn').onclick = async () => {
-      const form = document.getElementById('publish-form');
-      const data = UI.readForm(form);
-      if(!data.platform) { UI.toast('请选择发布平台','error'); return; }
-      UI.closeModal(data);
+      const btn = document.getElementById('publish-save-btn');
+      if(btn.dataset.submitting === 'true') return;
+      btn.dataset.submitting = 'true';
+      btn.disabled = true;
+      btn.textContent = '发布中...';
+      try {
+        const form = document.getElementById('publish-form');
+        const data = UI.readForm(form);
+        if(!data.platform) { UI.toast('请选择发布平台','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
+        UI.closeModal(data);
+      } catch(e) {
+        btn.disabled = false;
+        btn.textContent = btnOrigText;
+        btn.dataset.submitting = 'false';
+      }
     };
   }, 50);
   const result = await modalPromise;
@@ -2455,7 +2482,29 @@ P._saveFilters = () => {
   try { localStorage.setItem(P._CF_STORAGE, JSON.stringify(toSave)); } catch(e){}
 };
 
-P._resetPage = () => { P._contentPage = 1; };
+P._resetPage = () => { P._contentPage = 1; P._contentTableSort = { key: null, dir: 'none' }; };
+
+// --- 表格列排序状态: { key: 'views'|'exposure'|..., dir: 'none'|'desc'|'asc' } ---
+P._contentTableSort = { key: null, dir: 'none' };
+
+P._renderSortTh = (label, key) => {
+  const st = P._contentTableSort;
+  const active = st.key === key;
+  const cls = active ? ('sortable-th active sort-' + st.dir) : 'sortable-th sort-none';
+  return `<th class="${cls}" data-content-sort="${key}"><span>${label}</span><span class="sort-icon"><i class="sort-up"></i><i class="sort-down"></i></span></th>`;
+};
+
+P._applyTableSort = (filtered) => {
+  const st = P._contentTableSort;
+  if(!st.key || st.dir === 'none') return filtered;
+  const key = st.key;
+  const desc = st.dir === 'desc';
+  return [...filtered].sort((a, b) => {
+    const va = (a.metrics?.[key] || 0);
+    const vb = (b.metrics?.[key] || 0);
+    return desc ? (vb - va) : (va - vb);
+  });
+};
 
 P._clearFilters = () => {
   P._contentFilters = P._defaultFilters();
@@ -2570,6 +2619,11 @@ P.renderContents = (containerId) => {
     });
   }
 
+  // ====== 表格列排序（覆盖筛选栏排序） ======
+  if(P._contentTableSort.key && P._contentTableSort.dir !== 'none') {
+    filtered = P._applyTableSort(filtered);
+  }
+
   // ====== 统计（全量，不受分页影响） ======
   const s_ = (key) => filtered.reduce((s,c)=>s+(c.metrics?.[key]||0),0);
   const totalCount = filtered.length;
@@ -2652,7 +2706,7 @@ P.renderContents = (containerId) => {
   } else {
     html += `<div class="overflow-x-auto"><table class="cos-table">
       <thead><tr>
-        <th>封面</th><th style="min-width:220px">标题</th><th>平台</th><th>发布时间</th><th>观看数</th><th>曝光</th><th>点赞</th><th>评论</th><th>收藏</th><th>分享</th><th>投流</th><th>金额</th><th>操作</th>
+        <th>封面</th><th style="min-width:220px">标题</th><th>平台</th><th>发布时间</th>${P._renderSortTh('观看数','views')}${P._renderSortTh('曝光','exposure')}${P._renderSortTh('点赞','likes')}${P._renderSortTh('评论','comments')}${P._renderSortTh('收藏','favorites')}${P._renderSortTh('分享','shares')}<th>投流</th><th>金额</th><th>操作</th>
       </tr></thead><tbody>
       ${pageItems.map(c=>{
         const hasAd=(c.metrics?.adCost||0)>0;
@@ -2799,6 +2853,25 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
     b.onclick=()=>{F.sortBy=b.dataset.quickSort;F.sortDesc=b.dataset.desc==='true';F.burst=false;P._resetPage();P._saveFilters();P.renderContents();};
   });
 
+  // 表格列排序
+  document.querySelectorAll('[data-content-sort]').forEach(th => {
+    th.onclick = () => {
+      const key = th.dataset.contentSort;
+      const st = P._contentTableSort;
+      if(st.key === key) {
+        // 循环: none → desc → asc → none
+        if(st.dir === 'none')      st.dir = 'desc';
+        else if(st.dir === 'desc') st.dir = 'asc';
+        else                       { st.dir = 'none'; st.key = null; }
+      } else {
+        st.key = key;
+        st.dir = 'desc';
+      }
+      P._contentPage = 1;
+      P.renderContents();
+    };
+  });
+
   // 查看/编辑/删除
   document.querySelectorAll('[data-view-content]').forEach(b=>{b.onclick=()=>P._openContentDrawer(b.dataset.viewContent);});
   document.querySelectorAll('[data-edit-content]').forEach(b=>{b.onclick=()=>P._openContentEditModal(b.dataset.editContent);});
@@ -2826,7 +2899,8 @@ P._openContentDrawer = (contentId) => {
           <div><span class="text-xs text-gray-400">发布时间</span><p class="text-sm text-gray-700 mt-1">${c.publishDate} ${c.publishTime||''}</p></div>
           <div><span class="text-xs text-gray-400">评分</span><div class="mt-1">${UI.ratingBadge(c.rating)}</div></div>
         </div>
-        ${c.contentLink?`<div><span class="text-xs text-gray-400">链接</span><p class="text-sm text-blue-600 mt-1 break-all"><a href="${H.esc(c.contentLink)}" target="_blank">${H.esc(c.contentLink)}</a></p></div>`:''}
+        <div><span class="text-xs text-gray-400">内容链接</span><p class="text-sm mt-1">${c.contentLink ? `<a href="${H.esc(c.contentLink)}" target="_blank" class="text-blue-600 hover:underline break-all">打开链接</a>` : '<span class="text-gray-400">-</span>'}</p></div>
+        ${c.bodyText?`<div><span class="text-xs text-gray-400">正文内容</span><p class="text-sm text-gray-700 mt-1 whitespace-pre-wrap bg-gray-50 p-3 rounded-lg max-h-60 overflow-y-auto">${H.esc(c.bodyText)}</p></div>`:''}
         <div class="grid grid-cols-3 gap-4">
           <div><span class="text-xs text-gray-400">主题</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.theme||'-')}</p></div>
           <div><span class="text-xs text-gray-400">形式</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.format||'-')}</p></div>
@@ -2837,7 +2911,6 @@ P._openContentDrawer = (contentId) => {
           <div><span class="text-xs text-gray-400">实际耗时</span><p class="text-sm text-gray-700 mt-1">${c.productionCostMinutes||0} 分钟</p></div>
         </div>
         ${c.tags&&c.tags.length?`<div><span class="text-xs text-gray-400">标签</span><div class="flex flex-wrap gap-1 mt-1">${c.tags.map(tg=>`<span class="cos-tag">${H.esc(tg)}</span>`).join('')}</div></div>`:''}
-        ${c.bodyText?`<div><span class="text-xs text-gray-400">正文</span><p class="text-sm text-gray-700 mt-1 whitespace-pre-wrap max-h-40 overflow-y-auto bg-gray-50 p-3 rounded-lg">${H.esc(c.bodyText)}</p></div>`:''}
         ${(()=>{const img=H.getCoverImage(c);return img?`<div><span class="text-xs text-gray-400">封面图</span><div class="mt-1"><img src="${img}" class="img-preview"></div></div>`:'';})()}
         ${c.publishScreenshot && (c.publishScreenshot.startsWith('data:') || c.publishScreenshot.startsWith('http')) ? `<div><span class="text-xs text-gray-400">发布截图</span><div class="mt-1"><img src="${c.publishScreenshot}" class="img-preview"></div></div>`:''}
         <div class="border-t pt-4 mt-4">
@@ -2853,10 +2926,6 @@ P._openContentDrawer = (contentId) => {
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">投流</div><div class="text-sm font-semibold mt-1">¥${c.metrics?.adCost||0}</div></div>
           </div>
         </div>
-        ${c.review?.why||c.review?.result?`<div class="border-t pt-4"><h3 class="text-sm font-semibold text-gray-700 mb-3">🔄 复盘</h3>
-          ${c.review.why?`<div class="mb-2"><span class="text-xs text-gray-400">为什么做</span><p class="text-sm text-gray-700">${H.esc(c.review.why)}</p></div>`:''}
-          ${c.review.result?`<div class="mb-2"><span class="text-xs text-gray-400">结果如何</span><p class="text-sm text-gray-700">${H.esc(c.review.result)}</p></div>`:''}
-        </div>`:''}
         <div class="text-xs text-gray-400 mt-4">创建：${H.fmtDateTime(c.createdAt)}</div>
       </div>
     </div>`;
@@ -2873,6 +2942,8 @@ P._openContentEditModal = async (contentId) => {
       <h2 class="text-base font-semibold text-gray-900 mb-5">编辑内容</h2>
       <form id="content-edit-form" class="space-y-4">
         <div>${UI.renderField('标题','title','text',c.title)}</div>
+        <div>${UI.renderField('内容链接','contentLink','url',c.contentLink||'',null,'https://...')}</div>
+        <div>${UI.renderField('正文内容','bodyText','textarea',c.bodyText||'',null,'粘贴正文')}</div>
         <div>${UI.renderField('封面图','coverImage','image',H.getCoverImage(c)||'')}</div>
         <div>${UI.renderField('发布截图','publishScreenshot','image',(c.publishScreenshot&&(c.publishScreenshot.startsWith('data:')||c.publishScreenshot.startsWith('http')))?c.publishScreenshot:'')}</div>
         <div class="grid grid-cols-3 gap-4">
@@ -2896,12 +2967,6 @@ P._openContentEditModal = async (contentId) => {
           <div>${UI.renderField('涨粉','followerGrowth','number',String(c.metrics?.followerGrowth||0))}</div>
           <div>${UI.renderField('投流金额','adCost','number',String(c.metrics?.adCost||0))}</div>
         </div>
-        <div class="border-t pt-3"><h3 class="text-sm font-semibold text-gray-700 mb-3">复盘</h3></div>
-        <div>${UI.renderField('为什么做','why','textarea',c.review?.why||'')}</div>
-        <div>${UI.renderField('结果如何','result','textarea',c.review?.result||'')}</div>
-        <div>${UI.renderField('成功原因','successReasons','textarea',c.review?.successReasons||'')}</div>
-        <div>${UI.renderField('失败原因','failureReasons','textarea',c.review?.failureReasons||'')}</div>
-        <div>${UI.renderField('优化方向','optimization','textarea',c.review?.optimization||'')}</div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
           <button type="button" class="cos-btn cos-btn-primary" id="content-edit-save">保存</button>
@@ -2961,38 +3026,59 @@ P._openContentEditModal = async (contentId) => {
   if(!result||result==='cancel') return;
 
   const data = result;
+
   const metrics = {
-    exposure: parseInt(data.exposure)||0, views: parseInt(data.views)||0, likes: parseInt(data.likes)||0,
-    comments: parseInt(data.comments)||0, favorites: parseInt(data.favorites)||0,
-    shares: parseInt(data.shares)||0, downloads: parseInt(data.downloads)||0,
-    followerGrowth: parseInt(data.followerGrowth)||0, adCost: parseInt(data.adCost)||0,
-    dataUpdatedAt: H.nowISO(), recordDays: c.metrics?.recordDays||[]
+    ...(c.metrics || {}),
+    views: parseInt(data.views) || 0,
+    exposure: parseInt(data.exposure) || 0,
+    likes: parseInt(data.likes) || 0,
+    comments: parseInt(data.comments) || 0,
+    favorites: parseInt(data.favorites) || 0,
+    shares: parseInt(data.shares) || 0,
+    downloads: parseInt(data.downloads) || 0,
+    followerGrowth: parseInt(data.followerGrowth) || 0,
+    adCost: parseInt(data.adCost) || 0,
+    dataUpdatedAt: H.nowISO(),
+    recordDays: c.metrics?.recordDays || []
   };
-  const review = {
-    why: data.why||'', result: data.result||'',
-    successReasons: data.successReasons||'', failureReasons: data.failureReasons||'', optimization: data.optimization||''
-  };
+
   // 通用：判断图片字段最终值（新图 → 已清除 → 保留旧 → 无）
   const resolveImage = (fieldName, newVal, oldVal) => {
     if(newVal && (newVal.startsWith('data:') || newVal.startsWith('http'))) return newVal;
+
     const field = document.querySelector(`[data-image-field="${fieldName}"]`);
-    if(field && field.dataset.cleared==='true') return null;
+    if(field && field.dataset.cleared === 'true') return null;
+
     if(oldVal && (oldVal.startsWith('data:') || oldVal.startsWith('http'))) return oldVal;
+
     return null;
   };
-  S.contents.update(contentId, {
-    title: data.title,
+
+  const updated = await S.contents.update(contentId, {
+    title: data.title || c.title,
+    contentLink: data.contentLink || '',
+    bodyText: data.bodyText || '',
     coverImage: resolveImage('coverImage', data.coverImage, oldCover),
     publishScreenshot: resolveImage('publishScreenshot', data.publishScreenshot, oldScreenshot),
-    rating: data.rating||null,
-    publishDate: data.publishDate||c.publishDate,
-    publishTime: data.publishTime||c.publishTime||'',
-    platform: data.platform||c.platform,
-    productionCostMinutes: parseInt(data.productionCostMinutes)||0,
-    metrics, review
+    rating: data.rating || null,
+    publishDate: data.publishDate || c.publishDate,
+    publishTime: data.publishTime || c.publishTime || '',
+    platform: data.platform || c.platform,
+    productionCostMinutes: parseInt(data.productionCostMinutes) || 0,
+    metrics,
+    updatedAt: H.nowISO()
   });
+
+  if(!updated) {
+    UI.toast('内容更新失败', 'error');
+    return;
+  }
+
   UI.toast('内容已更新');
   P.renderContents();
+
+  // 如果详情抽屉还打开着，刷新当前详情
+  P._openContentDrawer(contentId);
 };
 
 // ==================== 内容日历页面 ====================
@@ -3178,6 +3264,14 @@ P.renderTopicsPage = () => {
 P.renderContentsPage = () => {
   document.getElementById('page-body').innerHTML = '<div id="page-body-inner"></div>';
   P.renderContents('page-body-inner');
+  // 内容库顶部操作按钮
+  const actionsEl = document.getElementById('page-actions');
+  if(actionsEl) actionsEl.innerHTML = '<button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-import-xhs">📥 导入小红书数据</button>';
+  // 绑定导入按钮
+  setTimeout(() => {
+    const btn = document.getElementById('btn-import-xhs');
+    if(btn) btn.onclick = () => P._importXiaohongshuData();
+  }, 50);
 };
 
 P.renderCalendarPage = () => {
@@ -3864,6 +3958,335 @@ P._exportUsersExcel = () => {
   const BOM='\uFEFF'; const blob = new Blob([BOM+[header,...lines].join('\n')],{type:'text/csv;charset=utf-8'});
   const url=URL.createObjectURL(blob); const a=document.createElement('a');a.href=url;a.download='users-'+H.today()+'.csv';a.click();URL.revokeObjectURL(url);
   UI.toast('已导出');
+};
+
+// ==================== 小红书数据导入更新 ====================
+
+// 数字解析: "1.2万"→12000, "1,234"→1234, "-"→null, 空→null
+P._parseNumber = (v) => {
+  if(v === null || v === undefined || v === '') return null;
+  const s = String(v).trim().replace(/,/g, '');
+  if(s === '-' || s === '—' || s === '') return null;
+  const wanMatch = s.match(/^([\d.]+)\s*万$/);
+  if(wanMatch) return Math.round(parseFloat(wanMatch[1]) * 10000);
+  const yiMatch = s.match(/^([\d.]+)\s*亿$/);
+  if(yiMatch) return Math.round(parseFloat(yiMatch[1]) * 100000000);
+  const num = parseFloat(s);
+  return isNaN(num) ? null : Math.round(num);
+};
+
+// 链接标准化：去空格、去末尾/、去query
+P._normalizeLink = (url) => {
+  if(!url) return '';
+  let s = String(url).trim();
+  try {
+    const u = new URL(s.startsWith('http') ? s : 'https://' + s);
+    return u.origin + u.pathname.replace(/\/+$/, '');
+  } catch(_) {
+    return s.replace(/\/+$/, '').split('?')[0].trim();
+  }
+};
+
+// 标题标准化
+P._normalizeTitle = (t) => {
+  if(!t) return '';
+  return String(t).trim().replace(/\s+/g, ' ').replace(/[，。！？；：""''《》【】（）]/g, (m) => {
+    const map = {'，':',','。':'.','！':'!','？':'?','；':';','：':':','""':'"','''':"'",'《':'<','》':'>','【':'[','】':']','（':'(','）':')'};
+    return map[m] || m;
+  });
+};
+
+// 字段兼容映射：返回命中的列索引
+P._findCol = (header, candidates) => {
+  for(const c of candidates) {
+    const idx = header.findIndex(h => String(h||'').trim().toLowerCase() === c.toLowerCase());
+    if(idx >= 0) return idx;
+  }
+  return -1;
+};
+P._findColFuzzy = (header, candidates) => {
+  for(const c of candidates) {
+    const idx = header.findIndex(h => String(h||'').toLowerCase().includes(c.toLowerCase()));
+    if(idx >= 0) return idx;
+  }
+  return -1;
+};
+
+P._importXiaohongshuData = () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.xls,.csv';
+  input.onchange = async (e) => {
+    const file = e.target.files[0];
+    if(!file) return;
+
+    const ext = file.name.split('.').pop().toLowerCase();
+    let rows = [];
+
+    // 解析文件
+    if(ext === 'xlsx' || ext === 'xls') {
+      if(typeof XLSX === 'undefined') { UI.toast('Excel 组件加载中，请稍后重试','error'); return; }
+      try {
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+        rows = rows.filter(r => r.some(c => String(c||'').trim() !== ''));
+      } catch(err) {
+        console.error('XLSX 解析失败:', err);
+        UI.toast('文件解析失败','error');
+        return;
+      }
+    } else {
+      const text = await file.text();
+      rows = text.split('\n').filter(Boolean).map(line => {
+        const cols = [];
+        let inQ = false, cur = '';
+        for(const ch of line) {
+          if(ch === '"') { inQ = !inQ; continue; }
+          if(ch === ',' && !inQ) { cols.push(cur.trim()); cur = ''; continue; }
+          cur += ch;
+        }
+        cols.push(cur.trim());
+        return cols;
+      });
+    }
+
+    if(rows.length < 2) { UI.toast('文件为空或无表头','error'); return; }
+
+    const header = rows[0].map(h => String(h||'').trim());
+
+    // 字段定位
+    const colTitle = P._findColFuzzy(header, ['标题','笔记标题','作品标题','内容标题','title']);
+    const colDate = P._findColFuzzy(header, ['发布时间','发布日期','日期','publishdate','date']);
+    const colLink = P._findColFuzzy(header, ['链接','笔记链接','内容链接','作品链接','url','link']);
+    const colViews = P._findColFuzzy(header, ['观看数','播放量','浏览量','阅读量','views']);
+    const colExposure = P._findColFuzzy(header, ['曝光','曝光量','展现','展现量','exposure']);
+    const colLikes = P._findColFuzzy(header, ['点赞','点赞数','likes']);
+    const colComments = P._findColFuzzy(header, ['评论','评论数','comments']);
+    const colFavorites = P._findColFuzzy(header, ['收藏','收藏数','favorites']);
+    const colShares = P._findColFuzzy(header, ['分享','分享数','shares']);
+
+    if(colTitle < 0 && colLink < 0 && colDate < 0) {
+      UI.toast('需要「标题」「链接」或「发布时间」中至少一列','error');
+      return;
+    }
+
+    // 解析数据行
+    const imported = [];
+    for(let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      const title = (colTitle >= 0 ? String(r[colTitle]||'').trim() : '');
+      const link = (colLink >= 0 ? String(r[colLink]||'').trim() : '');
+      const rawDate = colDate >= 0 ? String(r[colDate]||'').trim() : '';
+      const date = H.parseDate(rawDate) || rawDate;
+      if(!title && !link) continue;
+
+      imported.push({
+        _rawIndex: i,
+        title,
+        link,
+        date,
+        views: P._parseNumber(colViews >= 0 ? r[colViews] : null),
+        exposure: P._parseNumber(colExposure >= 0 ? r[colExposure] : null),
+        likes: P._parseNumber(colLikes >= 0 ? r[colLikes] : null),
+        comments: P._parseNumber(colComments >= 0 ? r[colComments] : null),
+        favorites: P._parseNumber(colFavorites >= 0 ? r[colFavorites] : null),
+        shares: P._parseNumber(colShares >= 0 ? r[colShares] : null),
+      });
+    }
+
+    if(imported.length === 0) { UI.toast('未解析到有效数据行','error'); return; }
+
+    // 匹配
+    const contents = S.contents.all();
+    const matches = [];    // { imported, content, matchType }
+    const unmatched = [];  // imported 中未匹配的
+    const matchedContentIds = new Set();
+
+    for(const imp of imported) {
+      let best = null;
+      let bestType = '';
+
+      // 第一优先级: link 匹配
+      if(imp.link) {
+        const normLink = P._normalizeLink(imp.link);
+        for(const c of contents) {
+          if(P._normalizeLink(c.contentLink||'') === normLink) {
+            best = c; bestType = '链接匹配'; break;
+          }
+        }
+      }
+
+      // 第二优先级: title + platform (小红书)
+      if(!best && imp.title) {
+        const normTitle = P._normalizeTitle(imp.title);
+        for(const c of contents) {
+          if(matchedContentIds.has(c.id)) continue;
+          if(c.platform.toLowerCase().includes('小红书') || c.platform.toLowerCase().includes('xiaohongshu')) {
+            if(P._normalizeTitle(c.title||'') === normTitle) {
+              best = c; bestType = '标题+平台匹配'; break;
+            }
+          }
+        }
+      }
+
+      // 第三优先级: title + publishDate + platform
+      if(!best && imp.title && imp.date) {
+        const normTitle = P._normalizeTitle(imp.title);
+        for(const c of contents) {
+          if(matchedContentIds.has(c.id)) continue;
+          if(c.platform.toLowerCase().includes('小红书') || c.platform.toLowerCase().includes('xiaohongshu')) {
+            if(P._normalizeTitle(c.title||'') === normTitle && c.publishDate === imp.date) {
+              best = c; bestType = '标题+日期+平台匹配'; break;
+            }
+          }
+        }
+      }
+
+      // 第四优先级: 标题相似度 + 日期接近
+      if(!best && imp.title) {
+        const normTitle = P._normalizeTitle(imp.title);
+        let bestScore = 0;
+        for(const c of contents) {
+          if(matchedContentIds.has(c.id)) continue;
+          const cTitle = P._normalizeTitle(c.title||'');
+          let score = 0;
+          if(cTitle === normTitle) score = 100;
+          else if(cTitle.includes(normTitle) || normTitle.includes(cTitle)) score = 70;
+          else {
+            const longer = cTitle.length > normTitle.length ? cTitle : normTitle;
+            const shorter = cTitle.length > normTitle.length ? normTitle : cTitle;
+            if(shorter.length > 3) {
+              const overlap = [...shorter].filter(ch => longer.includes(ch)).length;
+              score = Math.round(overlap / longer.length * 60);
+            }
+          }
+          if(imp.date && c.publishDate) {
+            const d1 = imp.date, d2 = c.publishDate;
+            if(d1 === d2) score += 30;
+            else if(Math.abs(new Date(d1) - new Date(d2)) <= 3 * 86400000) score += 20;
+            else if(Math.abs(new Date(d1) - new Date(d2)) <= 7 * 86400000) score += 10;
+          }
+          if((c.platform||'').toLowerCase().includes('小红书')) score += 10;
+          if(score > bestScore && score >= 60) { bestScore = score; best = c; bestType = '相似度匹配(' + score + '%)'; }
+        }
+      }
+
+      if(best) {
+        matches.push({ imported: imp, content: best, matchType: bestType });
+        matchedContentIds.add(best.id);
+      } else {
+        unmatched.push(imp);
+      }
+    }
+
+    // 检查重复匹配（同一 content 被多条 import 匹配）和重复匹配（同一条 import 匹配多条 content）
+    const dupContentCounts = {};
+    matches.forEach(m => { dupContentCounts[m.content.id] = (dupContentCounts[m.content.id] || 0) + 1; });
+    const dupIds = Object.entries(dupContentCounts).filter(([,n]) => n > 1).map(([id]) => id);
+
+    // 显示预览弹窗
+    const canUpdate = matches.length;
+    const rowTotal = imported.length;
+
+    let previewHtml = `<div class="p-4" style="max-width:720px">
+      <div class="flex items-center justify-between mb-4">
+        <h3 class="text-base font-semibold">📥 小红书数据导入预览</h3>
+        <span class="text-xs text-gray-400">共 ${rowTotal} 行</span>
+      </div>
+      <div class="grid grid-cols-3 gap-3 mb-4">
+        <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">可更新</div><div class="text-xl font-bold text-green-600">${canUpdate}</div></div>
+        <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">未匹配</div><div class="text-xl font-bold text-amber-600">${unmatched.length}</div></div>
+        <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">重复匹配</div><div class="text-xl font-bold ${dupIds.length>0?'text-red-500':'text-gray-400'}">${dupIds.length}</div></div>
+      </div>`;
+
+    if(canUpdate > 0) {
+      previewHtml += `<div class="mb-3"><span class="text-sm font-medium text-gray-700">📋 匹配详情</span></div>`;
+      previewHtml += `<div class="space-y-2 max-h-64 overflow-y-auto mb-4">`;
+      matches.forEach(m => {
+        const imp = m.imported;
+        const c = m.content;
+        const diffs = [];
+        if(imp.views != null && imp.views !== (c.metrics?.views||0)) diffs.push(`观看${c.metrics?.views||0}→${imp.views}`);
+        if(imp.exposure != null && imp.exposure !== (c.metrics?.exposure||0)) diffs.push(`曝光${c.metrics?.exposure||0}→${imp.exposure}`);
+        if(imp.likes != null && imp.likes !== (c.metrics?.likes||0)) diffs.push(`点赞${c.metrics?.likes||0}→${imp.likes}`);
+        if(imp.comments != null && imp.comments !== (c.metrics?.comments||0)) diffs.push(`评论${c.metrics?.comments||0}→${imp.comments}`);
+        if(imp.favorites != null && imp.favorites !== (c.metrics?.favorites||0)) diffs.push(`收藏${c.metrics?.favorites||0}→${imp.favorites}`);
+        if(imp.shares != null && imp.shares !== (c.metrics?.shares||0)) diffs.push(`分享${c.metrics?.shares||0}→${imp.shares}`);
+        const hasDiff = diffs.length > 0;
+        previewHtml += `<div class="cos-card p-3 text-xs ${dupIds.includes(c.id)?'border-red-300 bg-red-50/30':''}">
+          <div class="flex items-center justify-between">
+            <span class="font-medium text-gray-800 truncate" style="max-width:280px">${H.esc(H.truncate(imp.title||c.title, 30))}</span>
+            <span class="text-gray-400">${m.matchType}</span>
+          </div>
+          <div class="text-gray-500 mt-1">→ ${H.esc(H.truncate(c.title, 30))}</div>
+          ${hasDiff ? `<div class="text-blue-600 mt-1">${diffs.join(' · ')}</div>` : `<div class="text-gray-400 mt-1">无变化</div>`}
+          ${dupIds.includes(c.id) ? '<div class="text-red-500 mt-1">⚠ 多条数据匹配到同一内容</div>' : ''}
+        </div>`;
+      });
+      previewHtml += `</div>`;
+    }
+
+    if(unmatched.length > 0) {
+      previewHtml += `<div class="mb-3"><span class="text-sm font-medium text-gray-700">⚠ 未匹配数据 (${unmatched.length}条)</span></div>`;
+      previewHtml += `<div class="space-y-1 max-h-32 overflow-y-auto mb-4 text-xs text-gray-500">`;
+      unmatched.forEach(imp => {
+        previewHtml += `<div class="flex items-center justify-between py-1 border-b border-gray-50">
+          <span class="truncate" style="max-width:300px">${H.esc(imp.title || imp.link || '(无标题)')}</span>
+          <span>${imp.date||''}</span>
+        </div>`;
+      });
+      previewHtml += `</div>`;
+    }
+
+    previewHtml += `<div class="flex justify-end gap-3 pt-2 border-t">
+      <button class="cos-btn cos-btn-secondary" id="xhs-import-cancel">取消</button>
+      <button class="cos-btn cos-btn-primary" id="xhs-import-confirm" ${canUpdate===0?'disabled':''}>确认更新 ${canUpdate} 条</button>
+    </div></div>`;
+
+    const confirmed = await new Promise(resolve => {
+      UI.openModal(previewHtml, { width: 'max-w-2xl' }).then(result => resolve(result === 'confirmed'));
+      setTimeout(() => {
+        const cfm = document.getElementById('xhs-import-confirm');
+        const ccl = document.getElementById('xhs-import-cancel');
+        if(cfm) cfm.onclick = () => UI.closeModal('confirmed');
+        if(ccl) ccl.onclick = () => UI.closeModal('cancel');
+      }, 100);
+    });
+
+    if(!confirmed) return;
+
+    // 执行更新
+    let updated = 0, failed = 0;
+    for(const m of matches) {
+      try {
+        const newMetrics = { ...(m.content.metrics || {}) };
+        const imp = m.imported;
+        if(imp.views != null) newMetrics.views = imp.views;
+        if(imp.exposure != null) newMetrics.exposure = imp.exposure;
+        if(imp.likes != null) newMetrics.likes = imp.likes;
+        if(imp.comments != null) newMetrics.comments = imp.comments;
+        if(imp.favorites != null) newMetrics.favorites = imp.favorites;
+        if(imp.shares != null) newMetrics.shares = imp.shares;
+        newMetrics.dataUpdatedAt = H.nowISO();
+
+        const res = await S.contents.update(m.content.id, {
+          metrics: newMetrics,
+          updatedAt: H.nowISO()
+        });
+        if(res) updated++;
+        else failed++;
+      } catch(err) {
+        console.error('更新失败:', m.content.id, err);
+        failed++;
+      }
+    }
+
+    UI.toast(`导入完成：共读取 ${rowTotal} 条，成功更新 ${updated} 条${failed>0?'，失败 '+failed+' 条':''}，未匹配 ${unmatched.length} 条，新增 0 条。`);
+    P.renderContents();
+  };
+  input.click();
 };
 
 // ==================== 备份管理页面（时间线回滚） ====================
