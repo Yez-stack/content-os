@@ -1529,7 +1529,7 @@ const UI = window.UI = {};
 // ==================== Toast ====================
 
 UI.toast = (message, type='success') => {
-  const colors = { success:'bg-green-50 text-green-800 border-green-200', error:'bg-red-50 text-red-800 border-red-200', info:'bg-blue-50 text-blue-800 border-blue-200' };
+  const colors = { success:'bg-green-50 text-green-800 border-green-200', error:'bg-red-50 text-red-800 border-red-200', info:'bg-blue-50 text-blue-800 border-blue-200', warn:'bg-amber-50 text-amber-800 border-amber-200' };
   const el = document.createElement('div');
   el.className = 'pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-lg border shadow-sm text-sm font-medium toast-enter ' + (colors[type]||colors.info);
   el.textContent = message;
@@ -2059,7 +2059,7 @@ P._hotspotSyncToCloud = async (items) => {
         .upsert({ key:'hotspots', value:safeItems }, { onConflict:'key' });
       if(error) {
         console.warn('热点云端保存失败：', error.message);
-        UI?.toast?.('热点已保存到本地，但云端同步失败：' + error.message, 'error');
+        // 本地已保存成功：云端失败只记录状态，不弹红色错误，避免误以为保存失败。
         try { localStorage.setItem('content_os_last_hotspot_sync_status', 'error'); localStorage.setItem('content_os_last_hotspot_sync_error', error.message); } catch(_) {}
         return false;
       }
@@ -2071,7 +2071,7 @@ P._hotspotSyncToCloud = async (items) => {
     return false;
   } catch(e) {
     console.warn('热点云端保存异常', e);
-    UI?.toast?.('热点已保存到本地，但云端同步异常：' + e.message, 'error');
+    // 本地已保存成功：云端异常只记录状态，不弹红色错误，避免误以为保存失败。
     try { localStorage.setItem('content_os_last_hotspot_sync_status', 'error'); localStorage.setItem('content_os_last_hotspot_sync_error', e.message); } catch(_) {}
     return false;
   }
@@ -2646,7 +2646,7 @@ P._openHotspotPasteModal = async () => {
   const ok = await P._openHotspotImportPreview(items, '确认导入热点');
   if(!ok) return;
   const result = await P._mergeHotspots(items);
-  UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，云端未同步'}`);
+  UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
   P.renderHotspots();
 };
 
@@ -2692,7 +2692,7 @@ P._openHotspotManualModal = async () => {
     _source: 'manual'
   }, data.platform || '小红书', 0);
   const result = await P._mergeHotspots([item].filter(Boolean));
-  UI.toast(`热点已保存：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，云端未同步'}`);
+  UI.toast(`热点已保存：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
   P.renderHotspots();
 };
 
@@ -2730,7 +2730,7 @@ P._fetchHotspots = async (platform, btn) => {
     if(!normalized.length) throw new Error('接口返回中没有识别到热点列表');
     const result = await P._mergeHotspots(normalized);
     P._closeXhsLoadingModal();
-    UI.toast(`${platform}热点抓取完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，云端未同步'}`);
+    UI.toast(`${platform}热点抓取完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
     P.renderHotspots();
   } catch(e) {
     P._closeXhsLoadingModal();
@@ -2837,7 +2837,7 @@ P._importHotspotFile = () => {
       const ok = await P._openHotspotImportPreview(items, '确认导入热点文件');
       if(!ok) return;
       const result = await P._mergeHotspots(items);
-      UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，云端未同步'}`);
+      UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
       P.renderHotspots();
     } catch(err) {
       P._closeXhsLoadingModal();
