@@ -204,6 +204,19 @@
   .hotspot-fit-strong::before { background: #ef4444; }
   .hotspot-fit-good::before { background: #22c55e; }
   .img-preview { max-width:100%; max-height:200px; border-radius:8px; border:1px solid #f1f5f9; }
+
+/* === 内容日历：热门帖子轻提示 === */
+.calendar-hot-post {
+  border-left-color: #fb923c !important;
+}
+.calendar-hot-fire {
+  color: #f97316;
+  font-size: 11px;
+  line-height: 1;
+  margin-left: 4px;
+  flex-shrink: 0;
+}
+
 </style>
 <!-- Tailwind CDN 必须在 XLSX 之前加载，XLSX 用 defer 避免阻塞渲染 -->
 <script src="https://cdn.tailwindcss.com"></script>
@@ -325,6 +338,7 @@ C.NAV_GROUPS = [
       { id:'topics',       icon:'📋', label:'选题库',     route:'topics' },
       { id:'calendar',     icon:'📅', label:'内容日历',   route:'calendar' },
       { id:'contents',     icon:'📝', label:'内容库',     route:'contents' },
+      { id:'channels',     icon:'📣', label:'渠道分发',   route:'channels' },
     ]
   },
   {
@@ -375,6 +389,7 @@ C.DEFAULT_FORMATS  = ['图文','AI视频','真人口播','剧情','二创'];
 C.DEFAULT_HOOKS    = ['反常识','对比型','热点型','悬念型','情绪共鸣','干货分享'];
 C.DEFAULT_GOALS    = ['下载','涨粉','曝光','品牌','转化'];
 C.DEFAULT_PLATFORMS = ['小红书','抖音','视频号','公众号','B站'];
+C.DEFAULT_CHANNELS  = ['QQ自驾游频道','QQ群','微信群','小红书评论区','抖音评论区','公众号','其他'];
 
 // --- 筛选字段 ---
 C.FILTER_FIELDS = ['platform','theme','format','hook','goal','tags','rating'];
@@ -398,9 +413,28 @@ const H = window.H = {};
 H.uid = (prefix='') => prefix + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
 
 // --- 日期工具 ---
-H.today = () => new Date().toISOString().slice(0,10);
+// 注意：不要用 toISOString().slice(0,10) 做页面日期。
+// toISOString 是 UTC 时间，会导致内容日历出现“4号内容显示到5号/3号”的偏移。
+H._pad2 = (n) => String(n).padStart(2,'0');
+H._fmtLocalDate = (dt) => {
+  if(!(dt instanceof Date) || isNaN(dt.getTime())) return '';
+  return dt.getFullYear() + '-' + H._pad2(dt.getMonth()+1) + '-' + H._pad2(dt.getDate());
+};
+H._fmtUTCDate = (dt) => {
+  if(!(dt instanceof Date) || isNaN(dt.getTime())) return '';
+  return dt.getUTCFullYear() + '-' + H._pad2(dt.getUTCMonth()+1) + '-' + H._pad2(dt.getUTCDate());
+};
+H.today = () => H._fmtLocalDate(new Date());
 H.nowISO = () => new Date().toISOString();
-H.fmtDate = (d) => { if(!d)return''; const dt=new Date(d); return dt.toISOString().slice(0,10); };
+H.fmtDate = (d) => {
+  if(!d) return '';
+  if(typeof d === 'string') {
+    const m = d.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+    if(m) return m[1] + '-' + m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
+  }
+  const dt = d instanceof Date ? d : new Date(d);
+  return H._fmtLocalDate(dt);
+};
 H.fmtDateTime = (d) => { if(!d)return''; const dt=new Date(d); return dt.toLocaleString('zh-CN'); };
 H.heatToTrend = (hl) => hl>=5?'rising':hl>=3?'stable':'falling';
 H.fmtNum = (n) => { if(n>=100000000) return (n/100000000).toFixed(1)+'亿'; if(n>=10000) return (n/10000).toFixed(1)+'万'; return String(n); };
@@ -408,32 +442,36 @@ H.fmtNum = (n) => { if(n>=100000000) return (n/100000000).toFixed(1)+'亿'; if(n
 // --- 安全标准化日期（Excel 序列号 / ISO / 空 → YYYY-MM-DD）---
 H.parseDate = (v) => {
   if(!v) return '';
-  if(v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0,10);
-  // 已是合法 YYYY-MM-DD 字符串
-  if(typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && v>='2000-01-01' && v<='2099-12-31') return v;
-  // 字符串 YYYY/MM/DD → YYYY-MM-DD
-  if(typeof v === 'string') { const m=v.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})$/); if(m) return m[1]+'-'+m[2].padStart(2,'0')+'-'+m[3].padStart(2,'0'); }
-  // 数字 → Excel 序列号
+  if(v instanceof Date && !isNaN(v.getTime())) return H._fmtLocalDate(v);
+
+  if(typeof v === 'string') {
+    const s = v.trim();
+
+    // 已是合法 YYYY-MM-DD 字符串
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if(m && s>='2000-01-01' && s<='2099-12-31') return s;
+
+    // 字符串 YYYY/MM/DD 或 ISO/日期时间 → 直接取日期部分，不走 UTC 转换
+    m = s.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
+    if(m) return m[1] + '-' + m[2].padStart(2,'0') + '-' + m[3].padStart(2,'0');
+
+    // 小红书中文日期: "2026年07月05日19时45分02秒" → 2026-07-05
+    const cnMatch = s.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
+    if(cnMatch) return cnMatch[1] + '-' + cnMatch[2].padStart(2,'0') + '-' + cnMatch[3].padStart(2,'0');
+  }
+
+  // 数字 → Excel 序列号。这里用 UTC 日期，不受浏览器时区影响。
   const num = Number(v);
   if(!isNaN(num) && num > 10000 && num < 80000) {
     const ms = (num - 25569) * 86400000;
     const d = new Date(ms);
-    if(!isNaN(d.getTime())) return d.toISOString().slice(0,10);
+    return H._fmtUTCDate(d);
   }
-  // 小红书中文日期: "2026年07月05日19时45分02秒" → 2026-07-05
+
+  // 兜底：仅给非标准输入使用本地日期
   if(typeof v === 'string') {
-    const cnMatch = v.match(/^(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/);
-    if(cnMatch) return cnMatch[1] + '-' + cnMatch[2].padStart(2,'0') + '-' + cnMatch[3].padStart(2,'0');
-  }
-  // 字符串尝试 Date 解析
-  if(typeof v === 'string') {
-    const parts = v.split(/[\/\-\sT]/);
-    if(parts.length >= 3 && parts[0].length === 4) {
-      const d = new Date(parseInt(parts[0]), (parseInt(parts[1])||1)-1, parseInt(parts[2])||1);
-      if(!isNaN(d.getTime())) return d.toISOString().slice(0,10);
-    }
     const d = new Date(v);
-    if(!isNaN(d.getTime())) return d.toISOString().slice(0,10);
+    if(!isNaN(d.getTime())) return H._fmtLocalDate(d);
   }
   return '';
 };
@@ -454,7 +492,14 @@ H.thisWeek = () => {
 
 // --- 获取指定日期的周一 ---
 H.mondayOf = (d) => {
-  const dd = new Date(d);
+  const s = H.parseDate(d);
+  let dd;
+  if(s) {
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    dd = new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+  } else {
+    dd = new Date(d || Date.now());
+  }
   const day = dd.getDay();
   dd.setDate(dd.getDate() - (day===0?6:day-1));
   return H.fmtDate(dd);
@@ -597,6 +642,7 @@ S.emptyDB = () => ({
     hooks: [...C.DEFAULT_HOOKS],
     goals: [...C.DEFAULT_GOALS],
     platforms: [...C.DEFAULT_PLATFORMS],
+    channels: [...C.DEFAULT_CHANNELS],
   }
 });
 
@@ -857,6 +903,17 @@ S.load = async () => {
   } catch(_) {}
   const defCfg = S.emptyDB().config;
   for(const ck of Object.keys(defCfg)) { if(!(ck in S.db.config)) S.db.config[ck] = defCfg[ck]; }
+
+  // 统一内容日期字段，避免内容库和内容日历使用不同格式导致错位。
+  if(Array.isArray(S.db.contents)) {
+    S.db.contents = S.db.contents.map(c => ({
+      ...c,
+      publishDate: H.parseDate(c.publishDate) || c.publishDate || '',
+      publishTime: String(c.publishTime || '').match(/(\d{1,2})[:：](\d{2})/)
+        ? String(String(c.publishTime || '').match(/(\d{1,2})[:：](\d{2})/)[1]).padStart(2,'0') + ':' + String(c.publishTime || '').match(/(\d{1,2})[:：](\d{2})/)[2]
+        : (c.publishTime || '')
+    }));
+  }
   return true;
 };
 
@@ -1134,13 +1191,29 @@ S._crud = (collection) => {
       if(idx===-1) { console.warn('🔍 [CRUD] '+collection+'.update('+id+') 未找到'); return null; }
       const clean = sanitize(patch);
       console.log('🔍 [UPDATE CLEAN] ' + tbl, clean);
+      let res = null;
       try {
-        const res = await SUPABASE.from(tbl).update(clean).eq('id', id).select();
+        res = await SUPABASE.from(tbl).update(clean).eq('id', id).select();
         console.log('🔍 [UPDATE RESULT] ' + tbl, res);
         if(res.error) { console.error('❌ [UPDATE ERROR] ' + tbl + ': ' + res.error.message); return null; }
       } catch(e) { console.error('❌ [UPDATE EXCEPTION] ' + tbl + ':', e.message); return null; }
+
       try { localStorage.setItem('content_os_last_cloud_write', H.nowISO()); localStorage.setItem('content_os_last_cloud_write_status', 'ok'); } catch(_) {}
-      Object.assign(S.db[collection][idx], patch, {updatedAt:H.nowISO()});
+
+      // 关键：Supabase 保存成功后，立刻刷新本地内存。
+      // 这样内容库和内容日历不用刷新页面，也能马上看到新日期/新时间。
+      const returnedRow = res && Array.isArray(res.data) && res.data[0] ? _toCamel2(res.data[0]) : null;
+      if(returnedRow) Object.assign(S.db[collection][idx], returnedRow);
+      else Object.assign(S.db[collection][idx], patch, {updatedAt:H.nowISO()});
+
+      // 内容日期/时间字段再规范化一次，避免日历分组读到旧格式。
+      if(collection === 'contents') {
+        S.db[collection][idx].publishDate = H.parseDate(S.db[collection][idx].publishDate) || S.db[collection][idx].publishDate || '';
+        if(typeof P !== 'undefined' && P._normalizePublishTime) {
+          S.db[collection][idx].publishTime = P._normalizePublishTime(S.db[collection][idx].publishTime);
+        }
+      }
+
       return S.db[collection][idx];
     },
     remove: async (id) => {
@@ -1182,11 +1255,13 @@ S.config = {
   getHooks:     () => S.db.config.hooks,
   getGoals:     () => S.db.config.goals,
   getPlatforms: () => S.db.config.platforms,
+  getChannels:  () => S.db.config.channels,
   setThemes:    async (arr) => { S.db.config.themes=arr; await SUPABASE.from('config').upsert({key:'themes',value:arr}); },
   setFormats:   async (arr) => { S.db.config.formats=arr; await SUPABASE.from('config').upsert({key:'formats',value:arr}); },
   setHooks:     async (arr) => { S.db.config.hooks=arr; await SUPABASE.from('config').upsert({key:'hooks',value:arr}); },
   setGoals:     async (arr) => { S.db.config.goals=arr; await SUPABASE.from('config').upsert({key:'goals',value:arr}); },
   setPlatforms: async (arr) => { S.db.config.platforms=arr; await SUPABASE.from('config').upsert({key:'platforms',value:arr}); },
+  setChannels:  async (arr) => { S.db.config.channels=arr; await SUPABASE.from('config').upsert({key:'channels',value:arr}); },
 };
 
 // --- 发布选题 → 内容 ---
@@ -1214,8 +1289,8 @@ S.publishTopic = async (topicId, publishData) => {
     metrics: topic.parsedMetrics && Object.values(topic.parsedMetrics).some(v=>v>0) ? {
       exposure:0, likes:topic.parsedMetrics.likes||0, comments:topic.parsedMetrics.comments||0,
       favorites:topic.parsedMetrics.favorites||0, shares:topic.parsedMetrics.shares||0,
-      downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[]
-    } : { exposure:0, likes:0, comments:0, favorites:0, shares:0, downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[] },
+      downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||''
+    } : { exposure:0, likes:0, comments:0, favorites:0, shares:0, downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'' },
     rating: null,
     review: { why:'', result:'', successReasons:'', failureReasons:'', optimization:'' },
     sourcePlatform: topic.sourcePlatform||'manual',
@@ -1295,7 +1370,7 @@ S.importJSON = async (jsonStr) => {
       }
     }
     if(data.config) {
-      for(const ck of ['themes','formats','hooks','goals','platforms']) {
+      for(const ck of ['themes','formats','hooks','goals','platforms','channels']) {
         if(data.config[ck]) {
           const merged = [...new Set([...(S.db.config[ck]||[]), ...data.config[ck]])];
           const setter = 'set' + ck.charAt(0).toUpperCase() + ck.slice(1);
@@ -2112,6 +2187,37 @@ P._hotspotSaveConfig = (cfg) => {
 P._hotspotNormText = (v) => String(v || '').trim().replace(/\s+/g, ' ');
 P._hotspotNormKey = (v) => String(v || '').trim().toLowerCase().replace(/[\s#＃，。！？、:：；;《》“”"'‘’（）()【】\[\]\-_/\\]/g, '');
 
+
+P._hotspotSearchText = (h) => {
+  return [
+    h.keyword, h.title, h.category, h.angle, h.fitReason, h.heatText,
+    h.platform, h.status, h.sourceUrl, h.rank, h.participants, h.views, h.heat
+  ].map(v => String(v || '')).join(' ').toLowerCase();
+};
+
+P._hotspotMatchSearch = (h, query) => {
+  const q = String(query || '').trim().toLowerCase();
+  if(!q) return true;
+  const words = q.split(/\s+/).filter(Boolean);
+  const text = P._hotspotSearchText(h);
+  return words.every(w => text.includes(w));
+};
+
+P._hotspotFindDuplicate = (keyword, platform='') => {
+  const key = P._hotspotNormKey(keyword);
+  if(!key) return null;
+  const items = P._hotspotLoad();
+  return items.find(h => {
+    const hk = P._hotspotNormKey(h.keyword || h.title);
+    if(!hk || hk !== key) return false;
+    // 同平台优先视为重复；平台为空时全局判断
+    if(!platform || !h.platform) return true;
+    return h.platform === platform;
+  }) || items.find(h => P._hotspotNormKey(h.keyword || h.title) === key) || null;
+};
+
+
+
 P._hotspotExtractNumber = (v) => {
   if(v == null || v === '') return '';
   if(typeof v === 'number' && !isNaN(v)) return v;
@@ -2272,8 +2378,7 @@ P.renderHotspots = () => {
     else items = items.filter(x => (x.status || 'candidate') === P._hotspotFilter);
   }
   if(P._hotspotSearch) {
-    const q = P._hotspotSearch.toLowerCase();
-    items = items.filter(x => JSON.stringify(x).toLowerCase().includes(q));
+    items = items.filter(x => P._hotspotMatchSearch(x, P._hotspotSearch));
   }
   items = items.sort((a,b) => {
     if((a._expired?1:0) !== (b._expired?1:0)) return (a._expired?1:0) - (b._expired?1:0);
@@ -2312,11 +2417,17 @@ P.renderHotspots = () => {
       <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
         ${[{k:'all',l:'全部'},{k:'candidate',l:'待判断'},{k:'expired',l:'已过期'},{k:'saved_inspiration',l:'已存灵感'},{k:'saved_topic',l:'已生成选题'},{k:'ignored',l:'已忽略'}].map(f=>`<button class="px-3 py-1 rounded-md text-xs font-medium ${P._hotspotFilter===f.k?'bg-white shadow-sm text-gray-900':'text-gray-500 hover:text-gray-700'}" data-hot-filter="${f.k}">${f.l}</button>`).join('')}
       </div>
-      <input class="cos-input max-w-xs ml-auto" id="hotspot-search" placeholder="搜索热点、分类、角度" value="${H.esc(P._hotspotSearch || '')}">
-    </div>`;
+      <form id="hotspot-search-form" class="ml-auto flex items-center gap-1" onsubmit="return false;">
+        <input class="cos-input w-64" id="hotspot-search" placeholder="搜索热点、分类、角度" value="${H.esc(P._hotspotSearch || '')}">
+        <button class="cos-btn cos-btn-secondary cos-btn-xs" id="hotspot-search-btn" type="submit">搜索</button>
+        ${P._hotspotSearch ? `<button class="cos-btn cos-btn-ghost cos-btn-xs" id="hotspot-search-clear" type="button">清空</button>` : ''}
+      </form>
+    </div>
+    ${P._hotspotSearch ? `<div class="text-xs text-gray-400">搜索「${H.esc(P._hotspotSearch)}」：找到 ${items.length} 条结果</div>` : ''}`;
 
   if(items.length === 0) {
-    html += UI.emptyState('还没有热点数据，先粘贴导入一批小红书/抖音热点吧', '<button class="cos-btn cos-btn-primary cos-btn-sm" id="empty-hotspot-paste">粘贴导入热点</button>');
+    if(P._hotspotSearch) html += UI.emptyState('没有找到匹配的热点', '<button class="cos-btn cos-btn-secondary cos-btn-sm" id="hotspot-empty-clear">清空搜索</button>');
+    else html += UI.emptyState('还没有热点数据，先粘贴导入一批小红书/抖音热点吧', '<button class="cos-btn cos-btn-primary cos-btn-sm" id="empty-hotspot-paste">粘贴导入热点</button>');
   } else {
     html += `<div class="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">`;
     items.forEach(h => {
@@ -2359,12 +2470,64 @@ P.renderHotspots = () => {
 
   document.getElementById('btn-hotspot-paste')?.addEventListener('click', () => P._openHotspotPasteModal());
   document.getElementById('empty-hotspot-paste')?.addEventListener('click', () => P._openHotspotPasteModal());
+  document.getElementById('hotspot-empty-clear')?.addEventListener('click', () => { P._hotspotSearch = ''; P.renderHotspots(); });
   document.getElementById('btn-hotspot-manual')?.addEventListener('click', () => P._openHotspotManualModal());
   document.getElementById('btn-hotspot-import')?.addEventListener('click', () => P._importHotspotFile());
   document.querySelectorAll('[data-hot-platform]').forEach(btn => btn.onclick = () => { P._hotspotPlatform = btn.dataset.hotPlatform; P.renderHotspots(); });
   document.querySelectorAll('[data-hot-filter]').forEach(btn => btn.onclick = () => { P._hotspotFilter = btn.dataset.hotFilter; P.renderHotspots(); });
   const searchEl = document.getElementById('hotspot-search');
-  if(searchEl) searchEl.oninput = () => { P._hotspotSearch = searchEl.value.trim(); clearTimeout(P._hotspotSearchTimer); P._hotspotSearchTimer = setTimeout(()=>P.renderHotspots(), 250); };
+  const applyHotspotSearch = () => {
+    P._hotspotSearch = (searchEl?.value || '').trim();
+    P.renderHotspots();
+    setTimeout(() => {
+      const next = document.getElementById('hotspot-search');
+      if(next) {
+        next.focus();
+        const len = next.value.length;
+        try { next.setSelectionRange(len, len); } catch(_) {}
+      }
+    }, 0);
+  };
+  if(searchEl) {
+    let composing = false;
+    searchEl.addEventListener('compositionstart', () => { composing = true; });
+    searchEl.addEventListener('compositionend', () => {
+      composing = false;
+      clearTimeout(P._hotspotSearchTimer);
+      P._hotspotSearchTimer = setTimeout(applyHotspotSearch, 300);
+    });
+    searchEl.addEventListener('input', () => {
+      if(composing) return;
+      clearTimeout(P._hotspotSearchTimer);
+      P._hotspotSearchTimer = setTimeout(applyHotspotSearch, 450);
+    });
+    searchEl.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter') {
+        e.preventDefault();
+        clearTimeout(P._hotspotSearchTimer);
+        applyHotspotSearch();
+      }
+      if(e.key === 'Escape') {
+        e.preventDefault();
+        P._hotspotSearch = '';
+        P.renderHotspots();
+      }
+    });
+  }
+  document.getElementById('hotspot-search-form')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    clearTimeout(P._hotspotSearchTimer);
+    applyHotspotSearch();
+  });
+  document.getElementById('hotspot-search-btn')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    clearTimeout(P._hotspotSearchTimer);
+    applyHotspotSearch();
+  });
+  document.getElementById('hotspot-search-clear')?.addEventListener('click', () => {
+    P._hotspotSearch = '';
+    P.renderHotspots();
+  });
   document.querySelectorAll('[data-hot-to-insp]').forEach(btn => btn.onclick = () => P._hotspotToInspiration(btn.dataset.hotToInsp));
   document.querySelectorAll('[data-hot-to-topic]').forEach(btn => btn.onclick = () => P._hotspotToTopic(btn.dataset.hotToTopic));
   document.querySelectorAll('[data-hot-ignore]').forEach(btn => btn.onclick = async () => await P._hotspotUpdateStatus(btn.dataset.hotIgnore, 'ignored'));
@@ -2679,6 +2842,17 @@ P._openHotspotManualModal = async () => {
   const data = await p;
   if(!data || data === 'cancel') return;
   if(!String(data.keyword || '').trim()) { UI.toast('请填写热点词', 'error'); return; }
+
+  const dup = P._hotspotFindDuplicate(data.keyword, data.platform || '小红书');
+  if(dup) {
+    const goOn = await UI.confirm(
+      '热点已存在',
+      `列表里已经有「${dup.keyword || dup.title}」这个热点（平台：${dup.platform || '-'}）。继续保存会更新原有记录，不会新增重复项。`,
+      { confirmText:'继续更新', cancelText:'取消' }
+    );
+    if(!goOn) return;
+  }
+
   const item = P._normalizeHotspotItem({
     platform: data.platform || '小红书',
     keyword: data.keyword,
@@ -2692,7 +2866,7 @@ P._openHotspotManualModal = async () => {
     _source: 'manual'
   }, data.platform || '小红书', 0);
   const result = await P._mergeHotspots([item].filter(Boolean));
-  UI.toast(`热点已保存：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
+  UI.toast(`${result.added ? '热点已保存' : '热点已更新'}：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
   P.renderHotspots();
 };
 
@@ -3537,6 +3711,10 @@ P._openPublishModal = async (topicId) => {
           <div>${UI.renderField('发布日期','publishDate','date',H.today())}</div>
           <div>${UI.renderField('发布时间','publishTime','time',autoTime)}</div>
         </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>${UI.renderField('发布账号','publishAccount','text','',null,'公司主体号 / 小号A')}</div>
+          <div>${UI.renderField('账号类型','accountType','select','主体账号',P._accountTypes,'选择账号类型')}</div>
+        </div>
         <div>${UI.renderField('内容链接','contentLink','url',autoLink,null,'https://...')}</div>
         <div>${UI.renderField('正文内容','bodyText','textarea',autoBody,null,'粘贴正文')}</div>
         <div>${UI.renderField('封面图','coverImage','image','')}</div>
@@ -3683,6 +3861,8 @@ P._contentPageSize = 20;
 P._defaultFilters = () => ({
   search: '',
   platform: [],
+  account: [],
+  accountType: [],
   theme: [],
   format: [],
   hook: [],
@@ -3707,6 +3887,8 @@ P._loadFilters = () => {
     else P._contentFilters = P._defaultFilters();
   } catch(e){ P._contentFilters = P._defaultFilters(); }
   // 强制覆盖：默认排序 = publishDate DESC（防御缓存脏数据）
+  if(!Array.isArray(P._contentFilters.account)) P._contentFilters.account = [];
+  if(!Array.isArray(P._contentFilters.accountType)) P._contentFilters.accountType = [];
   if(!P._contentFilters.sortBy) P._contentFilters.sortBy = 'publishDate';
   if(P._contentFilters.sortDesc !== false) P._contentFilters.sortDesc = true;
 };
@@ -3728,6 +3910,21 @@ P._metricNumber = (v) => {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : 0;
 };
+
+// --- 发布账号标记（存放在 metrics JSON 中，不需要新增数据库字段） ---
+P._accountTypes = ['主体账号','测试小号','矩阵小号','合作账号','其他'];
+P._contentAccountName = (c) => String(c?.publishAccount || c?.accountName || c?.metrics?.publishAccount || c?.metrics?.accountName || '').trim();
+P._contentAccountType = (c) => String(c?.accountType || c?.metrics?.accountType || '').trim();
+P._contentAccountLabel = (c) => P._contentAccountName(c) || P._contentAccountType(c) || '未标注账号';
+P._accountBadgeClass = (c) => {
+  const type = P._contentAccountType(c);
+  if(type === '主体账号') return 'bg-blue-50 text-blue-600 border-blue-100';
+  if(type === '测试小号' || type === '矩阵小号') return 'bg-orange-50 text-orange-600 border-orange-100';
+  if(type === '合作账号') return 'bg-emerald-50 text-emerald-600 border-emerald-100';
+  return 'bg-gray-50 text-gray-500 border-gray-100';
+};
+P._accountBadge = (c) => `<span class="inline-flex items-center px-1.5 py-0.5 rounded-md border text-[11px] leading-none ${P._accountBadgeClass(c)}">${H.esc(P._contentAccountLabel(c))}</span>`;
+
 P._metricHistory = (cOrMetrics) => {
   const metrics = cOrMetrics?.metrics ? cOrMetrics.metrics : cOrMetrics;
   return Array.isArray(metrics?.metricHistory) ? metrics.metricHistory : [];
@@ -4124,6 +4321,8 @@ P._activeFilterTags = (F) => {
     if(!F.dateFrom&&!F.dateTo) tags.push({group:'时间',label:'自定义',key:'timeRange',val:'all'});
   }
   F.platform.forEach(v=>tags.push({group:'平台',label:v,key:'platform',val:v}));
+  (F.account||[]).forEach(v=>tags.push({group:'账号',label:v,key:'account',val:v}));
+  (F.accountType||[]).forEach(v=>tags.push({group:'账号类型',label:v,key:'accountType',val:v}));
   F.theme.forEach(v=>tags.push({group:'主题',label:v,key:'theme',val:v}));
   F.format.forEach(v=>tags.push({group:'形式',label:v,key:'format',val:v}));
   F.hook.forEach(v=>tags.push({group:'钩子',label:v,key:'hook',val:v}));
@@ -4163,6 +4362,8 @@ P.renderContents = (containerId) => {
   const formats = S.config.getFormats();
   const hooks = S.config.getHooks();
   const goals = S.config.getGoals();
+  const accountNames = [...new Set(contents.map(c=>P._contentAccountLabel(c)).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
+  const accountTypes = [...new Set([...P._accountTypes, ...contents.map(c=>P._contentAccountType(c)).filter(Boolean)])];
 
   // ====== 筛选 ======
   let filtered = contents;
@@ -4179,9 +4380,11 @@ P.renderContents = (containerId) => {
   const multi = (arr, key) => { if(arr&&arr.length) filtered=filtered.filter(c=>arr.includes(c[key]||'')); };
   multi(F.platform,'platform'); multi(F.theme,'theme'); multi(F.format,'format');
   multi(F.hook,'hook'); multi(F.goal,'goal'); multi(F.rating,'rating');
+  if(F.account && F.account.length) filtered = filtered.filter(c=>F.account.includes(P._contentAccountLabel(c)));
+  if(F.accountType && F.accountType.length) filtered = filtered.filter(c=>F.accountType.includes(P._contentAccountType(c)||'未标注'));
   if(F.hasAd==='yes') filtered=filtered.filter(c=>(c.metrics?.adCost||0)>0);
   else if(F.hasAd==='no') filtered=filtered.filter(c=>(c.metrics?.adCost||0)===0);
-  if(F.search) { const s=F.search.toLowerCase(); filtered=filtered.filter(c=>JSON.stringify([c.title,c.bodyText,c.tags]).toLowerCase().includes(s)); }
+  if(F.search) { const s=F.search.toLowerCase(); filtered=filtered.filter(c=>JSON.stringify([c.title,c.bodyText,c.tags,P._contentAccountLabel(c),P._contentAccountType(c)]).toLowerCase().includes(s)); }
   if(F.burst && contents.length) {
     const avgExp=contents.reduce((s,c)=>s+(c.metrics?.exposure||0),0)/contents.length;
     const avgLike=contents.reduce((s,c)=>s+(c.metrics?.likes||0),0)/contents.length;
@@ -4263,6 +4466,7 @@ P.renderContents = (containerId) => {
   html += `<div class="flex flex-wrap items-center gap-2">`;
   html += `<div class="relative flex-1 min-w-[160px] max-w-[300px]"><input class="cos-input pl-8" type="text" id="content-search" placeholder="搜索标题、正文、标签..." value="${H.esc(F.search||'')}"><span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span></div>`;
   html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-platform"><option value="">全部平台</option>${platforms.map(p=>`<option value="${H.esc(p)}" ${F.platform.includes(p)?'selected':''}>${H.esc(p)}</option>`).join('')}</select>`;
+  html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-account"><option value="">全部账号</option>${accountNames.map(a=>`<option value="${H.esc(a)}" ${(F.account||[]).includes(a)?'selected':''}>${H.esc(a)}</option>`).join('')}</select>`;
   const timeOpts = [{v:'all',l:'全部时间'},{v:'today',l:'今天'},{v:'7days',l:'最近7天'},{v:'30days',l:'最近30天'},{v:'thisMonth',l:'本月'},{v:'custom',l:'自定义...'}];
   html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-timeRange">${timeOpts.map(o=>`<option value="${o.v}" ${F.timeRange===o.v?'selected':''}>${o.l}</option>`).join('')}</select>`;
   const sortOpts = [{k:'publishDate',l:'发布时间'},{k:'exposure',l:'曝光量'},{k:'likes',l:'点赞量'},{k:'comments',l:'评论量'},{k:'shares',l:'分享量'},{k:'followerGrowth',l:'涨粉量'},{k:'adCost',l:'投流金额'},{k:'rating',l:'运营评分'}];
@@ -4282,6 +4486,7 @@ P.renderContents = (containerId) => {
 
   html += `<div id="content-advanced-panel" class="space-y-2 ${F.advancedOpen?'':'hidden'}">`;
   html += `<div class="border-t pt-2"></div>`;
+  html += P._renderFilterGroup('账号类型','accountType',accountTypes,F.accountType);
   html += P._renderFilterGroup('主题','theme',themes,F.theme);
   html += P._renderFilterGroup('形式','format',formats,F.format);
   html += P._renderFilterGroup('钩子','hook',hooks,F.hook);
@@ -4307,13 +4512,18 @@ P.renderContents = (containerId) => {
   } else {
     html += `<div class="overflow-x-auto"><table class="cos-table">
       <thead><tr>
-        <th>封面</th><th style="min-width:220px">标题</th><th>平台</th><th>发布时间</th>${P._renderSortTh('观看量','views')}${P._renderSortTh('曝光','exposure')}${P._renderSortTh('点赞','likes')}${P._renderSortTh('评论','comments')}${P._renderSortTh('收藏','favorites')}${P._renderSortTh('分享','shares')}${P._renderSortTh('投流金额','adCost')}<th>操作</th>
+        <th>封面</th><th style="min-width:220px">标题</th><th>平台/账号</th><th>发布时间</th>${P._renderSortTh('观看量','views')}${P._renderSortTh('曝光','exposure')}${P._renderSortTh('点赞','likes')}${P._renderSortTh('评论','comments')}${P._renderSortTh('收藏','favorites')}${P._renderSortTh('分享','shares')}${P._renderSortTh('投流金额','adCost')}<th>操作</th>
       </tr></thead><tbody>
       ${pageItems.map(c=>{
         return `<tr>
         <td>${(()=>{const img=H.getCoverImage(c);return img?`<img src="${img}" class="img-thumb" loading="lazy">`:'<div class="w-10 h-10 rounded-md bg-gray-100 flex items-center justify-center text-gray-400 text-xs">暂无</div>';})()}</td>
         <td class="cos-td-title"><div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900" data-view-content="${c.id}">${H.esc(H.truncate(c.title,20))}</span></div></td>
-        <td><span class="cos-tag">${H.esc(c.platform)}</span></td>
+        <td>
+          <div class="flex flex-col items-start gap-1">
+            <span class="cos-tag">${H.esc(c.platform)}</span>
+            ${P._accountBadge(c)}
+          </div>
+        </td>
         <td class="text-xs text-gray-500 whitespace-nowrap">${H.showDate(c.publishDate)}</td>
         <td class="text-xs text-gray-600 font-mono tabular-nums">${P._renderMetricCell(c,'views','data-views-edit="'+H.esc(c.id)+'" data-placeholder="0"')}</td>
         <td class="text-xs text-gray-600 font-mono tabular-nums">${P._renderMetricCell(c,'exposure','data-metric-edit="'+H.esc(c.id)+'" data-metric-field="exposure"')}</td>
@@ -4357,7 +4567,7 @@ P.renderContents = (containerId) => {
 
 P._renderFilterGroup = (label,key,options,selected) => {
   if(!options||!options.length) return '';
-  let h=`<div class="flex items-center gap-2 text-xs"><span class="text-gray-400 w-8 flex-shrink-0">${label}</span><div class="flex flex-wrap gap-1">`;
+  let h=`<div class="flex items-center gap-2 text-xs"><span class="text-gray-400 w-14 flex-shrink-0">${label}</span><div class="flex flex-wrap gap-1">`;
   h+=`<button class="filter-chip ${(selected||[]).length===0?'active':''}" data-multi-filter="${key}" data-value="">全部</button>`;
   options.forEach(o=>{const a=(selected||[]).includes(o);h+=`<button class="filter-chip ${a?'active':''}" data-multi-filter="${key}" data-value="${H.esc(o)}">${H.esc(o)}</button>`;});
   h+=`</div></div>`;
@@ -4398,6 +4608,10 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
   // 平台下拉
   const ps=document.getElementById('content-filter-platform');
   if(ps) ps.onchange=()=>{const v=ps.value;F.platform=v?[v]:[];P._resetPage();P._saveFilters();P.renderContents();};
+
+  // 发布账号下拉
+  const acc=document.getElementById('content-filter-account');
+  if(acc) acc.onchange=()=>{const v=acc.value;F.account=v?[v]:[];P._resetPage();P._saveFilters();P.renderContents();};
 
   // 时间下拉
   const tr=document.getElementById('content-filter-timeRange');
@@ -4500,8 +4714,9 @@ P._openContentDrawer = (contentId) => {
       </div>
       <div class="space-y-4">
         <div><span class="text-xs text-gray-400">标题</span><p class="text-sm font-medium text-gray-900 mt-1">${H.esc(c.title)}</p></div>
-        <div class="grid grid-cols-3 gap-4">
+        <div class="grid grid-cols-4 gap-4">
           <div><span class="text-xs text-gray-400">平台</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.platform)}</p></div>
+          <div><span class="text-xs text-gray-400">发布账号</span><div class="mt-1">${P._accountBadge(c)}</div></div>
           <div><span class="text-xs text-gray-400">发布时间</span><p class="text-sm text-gray-700 mt-1">${c.publishDate} ${c.publishTime||''}</p></div>
           <div><span class="text-xs text-gray-400">评分</span><div class="mt-1">${UI.ratingBadge(c.rating)}</div></div>
         </div>
@@ -4553,6 +4768,27 @@ P._openContentDrawer = (contentId) => {
   },0);
 };
 
+P._refreshAfterContentChange = (contentId) => {
+  const route = window.R?.currentRoute || window.location.hash.replace('#','') || '';
+  const drawerOpen = !document.getElementById('drawer-overlay')?.classList.contains('hidden');
+
+  if(route === 'calendar') {
+    P.renderCalendarPage();
+  } else if(route === 'analytics') {
+    P.renderAnalytics();
+  } else if(route === 'contents') {
+    P.renderContentsPage();
+  } else {
+    const inner = document.getElementById('page-body-inner');
+    if(inner) P.renderContents('page-body-inner');
+    else P.renderContents();
+  }
+
+  if(drawerOpen && contentId) {
+    setTimeout(() => P._openContentDrawer(contentId), 30);
+  }
+};
+
 // ==================== 内容编辑 Modal ====================
 
 P._openContentEditModal = async (contentId) => {
@@ -4571,6 +4807,10 @@ P._openContentEditModal = async (contentId) => {
           <div>${UI.renderField('发布日期','publishDate','date',c.publishDate||'')}</div>
           <div>${UI.renderField('发布时间','publishTime','time',c.publishTime||'')}</div>
           <div>${UI.renderField('平台','platform','select',c.platform||'',S.config.getPlatforms(),'选择平台')}</div>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>${UI.renderField('发布账号','publishAccount','text',P._contentAccountName(c),null,'公司主体号 / 小号A')}</div>
+          <div>${UI.renderField('账号类型','accountType','select',P._contentAccountType(c)||'',P._accountTypes,'选择账号类型')}</div>
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('评分','rating','select',c.rating||'',C.RATINGS,'未评分')}</div>
@@ -4660,7 +4900,9 @@ P._openContentEditModal = async (contentId) => {
     followerGrowth: parseInt(data.followerGrowth) || 0,
     adCost: parseInt(data.adCost) || 0,
     dataUpdatedAt: H.nowISO(),
-    recordDays: c.metrics?.recordDays || []
+    recordDays: c.metrics?.recordDays || [],
+    publishAccount: String(data.publishAccount || '').trim(),
+    accountType: data.accountType || ''
   };
   if(P._hasAnyMetricChange(c.metrics || {}, metrics)) {
     metrics.metricHistory = P._appendMetricHistory(c.metrics || {}, metrics, { source:'manual_edit', importedAt:H.nowISO(), fileName:'编辑弹窗' });
@@ -4678,6 +4920,9 @@ P._openContentEditModal = async (contentId) => {
     return null;
   };
 
+  const normalizedPublishDate = P._normalizePublishDate(data.publishDate, c.publishDate);
+  const normalizedPublishTime = P._normalizePublishTime(data.publishTime, c.publishTime);
+
   const updated = await S.contents.update(contentId, {
     title: data.title || c.title,
     contentLink: data.contentLink || '',
@@ -4685,8 +4930,8 @@ P._openContentEditModal = async (contentId) => {
     coverImage: resolveImage('coverImage', data.coverImage, oldCover),
     publishScreenshot: resolveImage('publishScreenshot', data.publishScreenshot, oldScreenshot),
     rating: data.rating || null,
-    publishDate: data.publishDate || c.publishDate,
-    publishTime: data.publishTime || c.publishTime || '',
+    publishDate: normalizedPublishDate,
+    publishTime: normalizedPublishTime,
     platform: data.platform || c.platform,
     productionCostMinutes: parseInt(data.productionCostMinutes) || 0,
     metrics,
@@ -4699,10 +4944,7 @@ P._openContentEditModal = async (contentId) => {
   }
 
   UI.toast('内容已更新');
-  P.renderContents();
-
-  // 如果详情抽屉还打开着，刷新当前详情
-  P._openContentDrawer(contentId);
+  P._refreshAfterContentChange(contentId);
 };
 
 // ==================== 内容日历页面 ====================
@@ -4710,6 +4952,18 @@ P._openContentEditModal = async (contentId) => {
 
 P._calView = P._calView || 'week'; // all | week | month | year
 P._calCurrentDate = P._calCurrentDate || H.today();
+
+P._normalizePublishDate = (v, fallback='') => {
+  return H.parseDate(v) || H.parseDate(fallback) || String(v || fallback || '').slice(0,10);
+};
+
+P._normalizePublishTime = (v, fallback='') => {
+  const raw = String((v != null && v !== '') ? v : (fallback || '')).trim();
+  if(!raw) return '';
+  const m = raw.match(/(\d{1,2})[:：](\d{2})/);
+  if(!m) return raw;
+  return String(Math.min(23, parseInt(m[1]) || 0)).padStart(2,'0') + ':' + m[2].slice(0,2);
+};
 
 P._calDateObj = (v) => {
   const s = H.parseDate(v) || String(v || '').slice(0,10);
@@ -4761,13 +5015,38 @@ P._calGroupByDate = (items) => {
   return byDate;
 };
 
+
+P._calendarIsHotPost = (c) => {
+  const m = c?.metrics || {};
+  const views = P._metricNumber(m.views);
+  const exposure = P._metricNumber(m.exposure);
+  const likes = P._metricNumber(m.likes);
+  const comments = P._metricNumber(m.comments);
+  const favorites = P._metricNumber(m.favorites);
+  const shares = P._metricNumber(m.shares);
+  return (
+    views >= 150 ||
+    exposure >= 1500 ||
+    likes >= 20 ||
+    favorites >= 8 ||
+    comments >= 3 ||
+    shares >= 3
+  );
+};
+
 P._calContentMiniCard = (c) => {
   const statusColor = {todo:'border-l-gray-300',in_progress:'border-l-blue-400',pending_publish:'border-l-amber-400',published:'border-l-green-400',discarded:'border-l-red-400'};
   const status = c.topicId ? (S.topics.get(c.topicId)||{}).status : 'published';
-  return `<div class="cos-card p-1.5 border-l-2 ${statusColor[status]||'border-l-gray-300'} cursor-pointer text-xs hover:shadow-sm transition-shadow" data-cal-content="${H.esc(c.id)}">
-    <div class="text-gray-800 line-clamp-1 font-medium">${H.esc(H.truncate(c.title,18))}</div>
+  const isHot = P._calendarIsHotPost(c);
+  return `<div class="cos-card p-1.5 border-l-2 ${isHot ? 'calendar-hot-post' : (statusColor[status]||'border-l-gray-300')} cursor-pointer text-xs hover:shadow-sm transition-shadow" data-cal-content="${H.esc(c.id)}">
+    <div class="flex items-center gap-1">
+      <div class="text-gray-800 line-clamp-1 font-medium flex-1 min-w-0">${H.esc(H.truncate(c.title,18))}</div>
+      ${isHot ? `<span class="calendar-hot-fire">🔥</span>` : ''}
+    </div>
     <div class="flex items-center gap-1 mt-0.5">
       <span class="text-gray-400">${H.esc(c.platform||'-')}</span>
+      <span class="text-gray-300">·</span>
+      <span class="text-gray-400 truncate">${H.esc(P._contentAccountLabel(c))}</span>
       <span class="text-gray-300">·</span>
       <span class="text-gray-400">${H.esc(c.publishTime||'--:--')}</span>
     </div>
@@ -4936,7 +5215,7 @@ P._renderCalendarAll = (all, byDate, target) => {
       </div>
       <div class="divide-y divide-gray-100">${arr.map(c=>`<div class="px-4 py-3 flex items-center gap-3 hover:bg-gray-50 cursor-pointer" data-cal-content="${H.esc(c.id)}">
         <div class="w-20 text-xs text-gray-400">${H.showDate(c.publishDate)} ${H.esc(c.publishTime||'')}</div>
-        <div class="min-w-0 flex-1"><div class="text-sm font-medium text-gray-900 truncate">${H.esc(c.title)}</div><div class="text-xs text-gray-400 mt-0.5">${H.esc(c.platform||'-')} · ${H.esc(c.theme||'-')}</div></div>
+        <div class="min-w-0 flex-1"><div class="text-sm font-medium text-gray-900 truncate">${H.esc(c.title)}</div><div class="text-xs text-gray-400 mt-0.5">${H.esc(c.platform||'-')} · ${H.esc(P._contentAccountLabel(c))} · ${H.esc(c.theme||'-')}</div></div>
         <div class="text-xs text-gray-400">观看量 ${H.fmtNum(P._metricNumber(c.metrics?.views))}</div>
       </div>`).join('')}</div>
     </div>`;
@@ -4947,7 +5226,11 @@ P._renderCalendarAll = (all, byDate, target) => {
 
 P.renderCalendar = (containerId) => {
   const target = containerId||'page-body';
-  const all = S.contents.all().map(c=>({ ...c, publishDate:H.parseDate(c.publishDate) || c.publishDate }));
+  const all = S.contents.all().map(c=>({
+    ...c,
+    publishDate: P._normalizePublishDate(c.publishDate),
+    publishTime: P._normalizePublishTime(c.publishTime)
+  }));
   const today = H.today();
   const byDate = P._calGroupByDate(all);
   const range = P._calRange();
@@ -5101,6 +5384,7 @@ P._renderSettingsTab_Config = () => {
     { key:'hooks', label:'钩子类型', getter: S.config.getHooks, setter: S.config.setHooks },
     { key:'goals', label:'运营目标', getter: S.config.getGoals, setter: S.config.setGoals },
     { key:'platforms', label:'发布平台', getter: S.config.getPlatforms, setter: S.config.setPlatforms },
+    { key:'channels', label:'发布渠道', getter: S.config.getChannels, setter: S.config.setChannels },
   ];
 
   let html = '<div class="space-y-6">';
@@ -6827,6 +7111,341 @@ P.renderPlaceholder = (pageName, emoji, containerId) => {
 P._analyticsRange = 'all';
 P._analyticsSort = 'exposure'; // exposure / likes / comments
 
+
+// ==================== 数据分析：发帖时间分析 ====================
+
+P._analyticsMedian = (values) => {
+  const arr = (values || []).map(v => P._metricNumber(v)).sort((a,b)=>a-b);
+  if(!arr.length) return 0;
+  const mid = Math.floor(arr.length / 2);
+  return arr.length % 2 ? arr[mid] : Math.round((arr[mid-1] + arr[mid]) / 2);
+};
+
+P._analyticsPublishMeta = (c) => {
+  const date = H.parseDate(c.publishDate);
+  if(!date) return null;
+  const dm = String(date).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!dm) return null;
+  const d = new Date(Number(dm[1]), Number(dm[2])-1, Number(dm[3]));
+  const week = d.getDay(); // 0 周日, 6 周六
+
+  const tm = String(c.publishTime || '').match(/(\d{1,2})[:：](\d{2})/);
+  const hour = tm ? Math.max(0, Math.min(23, parseInt(tm[1], 10) || 0)) : null;
+
+  let slot = { key:'unknown', label:'未填写时间', range:'-', order:99 };
+  if(hour != null) {
+    if(hour >= 6 && hour <= 11) slot = { key:'morning', label:'早上', range:'06:00-11:59', order:1 };
+    else if(hour >= 12 && hour <= 13) slot = { key:'noon', label:'中午', range:'12:00-13:59', order:2 };
+    else if(hour >= 14 && hour <= 17) slot = { key:'afternoon', label:'下午', range:'14:00-17:59', order:3 };
+    else if(hour >= 18 && hour <= 21) slot = { key:'evening', label:'晚上', range:'18:00-21:59', order:4 };
+    else if(hour >= 22 || hour <= 1) slot = { key:'late', label:'深夜', range:'22:00-01:59', order:5 };
+    else slot = { key:'dawn', label:'凌晨', range:'02:00-05:59', order:6 };
+  }
+
+  const weekLabels = ['周日','周一','周二','周三','周四','周五','周六'];
+  return {
+    date,
+    week,
+    weekLabel: weekLabels[week],
+    dayType: (week === 0 || week === 6) ? 'weekend' : 'workday',
+    dayTypeLabel: (week === 0 || week === 6) ? '周末' : '工作日',
+    hour,
+    slotKey: slot.key,
+    slotLabel: slot.label,
+    slotRange: slot.range,
+    slotOrder: slot.order
+  };
+};
+
+P._analyticsPublishRows = (contents) => {
+  return (contents || []).map(c => {
+    const meta = P._analyticsPublishMeta(c);
+    if(!meta) return null;
+    const m = c.metrics || {};
+    return {
+      c,
+      meta,
+      views: P._metricNumber(m.views),
+      exposure: P._metricNumber(m.exposure),
+      likes: P._metricNumber(m.likes),
+      comments: P._metricNumber(m.comments),
+      favorites: P._metricNumber(m.favorites),
+      shares: P._metricNumber(m.shares)
+    };
+  }).filter(Boolean);
+};
+
+P._analyticsGroupStats = (rows, groupFn) => {
+  const map = {};
+  (rows || []).forEach(r => {
+    const g = groupFn(r);
+    if(!g || !g.key) return;
+    if(!map[g.key]) map[g.key] = { key:g.key, label:g.label, range:g.range || '', order:g.order || 0, items:[] };
+    map[g.key].items.push(r);
+  });
+  return Object.values(map).map(g => {
+    const count = g.items.length;
+    const sum = (key) => g.items.reduce((s,x)=>s + P._metricNumber(x[key]), 0);
+    const best = g.items.slice().sort((a,b)=>
+      (b.views - a.views) ||
+      (b.exposure - a.exposure) ||
+      (b.likes - a.likes)
+    )[0];
+    return {
+      ...g,
+      count,
+      avgViews: count ? Math.round(sum('views') / count) : 0,
+      medianViews: P._analyticsMedian(g.items.map(x=>x.views)),
+      avgExposure: count ? Math.round(sum('exposure') / count) : 0,
+      avgLikes: count ? Math.round(sum('likes') / count) : 0,
+      avgFavorites: count ? Math.round(sum('favorites') / count) : 0,
+      best
+    };
+  });
+};
+
+P._analyticsBestStat = (stats, opts={}) => {
+  const minCount = opts.minCount || 2;
+  const pool = (stats || []).filter(s => s.count > 0 && s.key !== 'unknown');
+  if(!pool.length) return null;
+  const enough = pool.filter(s => s.count >= minCount);
+  const target = enough.length ? enough : pool;
+  return target.slice().sort((a,b)=>
+    (b.avgViews - a.avgViews) ||
+    (b.medianViews - a.medianViews) ||
+    (b.avgExposure - a.avgExposure)
+  )[0];
+};
+
+P._renderAnalyticsPublishTime = (filtered) => {
+  const rows = P._analyticsPublishRows(filtered);
+  if(!rows.length) {
+    return `<div class="cos-card p-5 mb-6">
+      <h3 class="text-sm font-semibold text-gray-700 mb-3">⏰ 发帖时间分析</h3>
+      ${UI.emptyState('当前时间范围内没有可分析的发布时间')}
+    </div>`;
+  }
+
+  const timeOrder = [
+    {key:'morning', label:'早上', range:'06:00-11:59', order:1},
+    {key:'noon', label:'中午', range:'12:00-13:59', order:2},
+    {key:'afternoon', label:'下午', range:'14:00-17:59', order:3},
+    {key:'evening', label:'晚上', range:'18:00-21:59', order:4},
+    {key:'late', label:'深夜', range:'22:00-01:59', order:5},
+    {key:'dawn', label:'凌晨', range:'02:00-05:59', order:6},
+    {key:'unknown', label:'未填写时间', range:'-', order:99},
+  ];
+
+  const timeStatsRaw = P._analyticsGroupStats(rows, r => ({
+    key:r.meta.slotKey, label:r.meta.slotLabel, range:r.meta.slotRange, order:r.meta.slotOrder
+  }));
+  const timeMap = Object.fromEntries(timeStatsRaw.map(s => [s.key, s]));
+  const timeStats = timeOrder.map(base => timeMap[base.key] || {
+    ...base, count:0, avgViews:0, medianViews:0, avgExposure:0, avgLikes:0, avgFavorites:0, best:null
+  });
+
+  const dayStats = P._analyticsGroupStats(rows, r => ({
+    key:r.meta.dayType, label:r.meta.dayTypeLabel, order:r.meta.dayType === 'workday' ? 1 : 2
+  })).sort((a,b)=>a.order-b.order);
+
+  const weekBase = ['周一','周二','周三','周四','周五','周六','周日'];
+  const weekStatsRaw = P._analyticsGroupStats(rows, r => ({
+    key:r.meta.weekLabel, label:r.meta.weekLabel, order:r.meta.week === 0 ? 7 : r.meta.week
+  }));
+  const weekMap = Object.fromEntries(weekStatsRaw.map(s => [s.key, s]));
+  const weekStats = weekBase.map((label, i) => weekMap[label] || {
+    key:label, label, order:i+1, count:0, avgViews:0, medianViews:0, avgExposure:0, avgLikes:0, avgFavorites:0, best:null
+  });
+
+  const bestTime = P._analyticsBestStat(timeStats);
+  const bestDayType = P._analyticsBestStat(dayStats, {minCount:2});
+  const bestWeekday = P._analyticsBestStat(weekStats, {minCount:2});
+  const sampleTip = rows.length < 10 ? '样本偏少，先当参考' : '优先参考样本数≥2的结果';
+
+  const bestTimeText = bestTime ? `${bestTime.label} ${bestTime.range}` : '暂无';
+  const bestDayText = bestDayType ? bestDayType.label : '暂无';
+  const bestWeekText = bestWeekday ? bestWeekday.label : '暂无';
+
+  const card = (cfg) => `<div class="rounded-2xl border ${cfg.border} ${cfg.bg} p-4">
+    <div class="text-xs ${cfg.subColor} mb-1">${H.esc(cfg.label)}</div>
+    <div class="text-lg font-semibold ${cfg.color}">${H.esc(cfg.value)}</div>
+    <div class="text-xs ${cfg.subColor} mt-1">${cfg.sub}</div>
+  </div>`;
+
+  const topCards = [
+    card({
+      label:'推荐发布时间',
+      value:bestTimeText,
+      sub: bestTime ? `均观看 ${H.fmtNum(bestTime.avgViews)} · ${bestTime.count}篇样本` : '暂无样本',
+      color:'text-orange-700',
+      subColor:'text-orange-500',
+      bg:'bg-orange-50/70',
+      border:'border-orange-100'
+    }),
+    card({
+      label:'更适合',
+      value:bestDayText,
+      sub: bestDayType ? `均观看 ${H.fmtNum(bestDayType.avgViews)} · ${bestDayType.count}篇样本` : '暂无样本',
+      color:'text-blue-700',
+      subColor:'text-blue-500',
+      bg:'bg-blue-50/70',
+      border:'border-blue-100'
+    }),
+    card({
+      label:'代表性星期',
+      value:bestWeekText,
+      sub: bestWeekday ? `均观看 ${H.fmtNum(bestWeekday.avgViews)} · ${bestWeekday.count}篇样本` : '暂无样本',
+      color:'text-emerald-700',
+      subColor:'text-emerald-500',
+      bg:'bg-emerald-50/70',
+      border:'border-emerald-100'
+    })
+  ].join('');
+
+  const suggestionParts = [
+    bestWeekday ? bestWeekday.label : '',
+    bestDayType ? bestDayType.label : '',
+    bestTime ? bestTime.label : ''
+  ].filter(Boolean);
+  const suggestion = suggestionParts.length
+    ? `建议优先测试：${suggestionParts.join(' · ')}`
+    : '暂无明显规律，建议继续积累发布时间数据';
+
+  const bestContent = bestTime?.best || bestWeekday?.best || bestDayType?.best || null;
+
+  const evidenceItem = (label, stat, desc) => {
+    if(!stat) return '';
+    return `<div class="rounded-xl border border-gray-100 bg-white p-3">
+      <div class="flex items-center justify-between gap-3">
+        <div>
+          <div class="text-xs text-gray-400">${H.esc(label)}</div>
+          <div class="text-sm font-semibold text-gray-800 mt-0.5">${H.esc(stat.label)}${stat.range ? ` <span class="text-gray-400 font-normal">${H.esc(stat.range)}</span>` : ''}</div>
+        </div>
+        <div class="text-right">
+          <div class="text-base font-semibold text-gray-900">${H.fmtNum(stat.avgViews)}</div>
+          <div class="text-[11px] text-gray-400">均观看</div>
+        </div>
+      </div>
+      <div class="mt-2 text-xs text-gray-500">${H.esc(desc)} · ${stat.count}篇样本 · 中位观看 ${H.fmtNum(stat.medianViews)}</div>
+      ${stat.best ? `<div class="mt-2 text-xs text-gray-400 line-clamp-1">代表内容：<span class="hover:text-blue-600 cursor-pointer" data-content-trend="${H.esc(stat.best.c.id)}">${H.esc(H.truncate(stat.best.c.title,24))}</span></div>` : ''}
+    </div>`;
+  };
+
+  const evidence = [
+    evidenceItem('时间依据', bestTime, '这个时间段平均观看更高'),
+    evidenceItem('日期类型依据', bestDayType, '工作日/周末对比后的更优结果'),
+    evidenceItem('星期依据', bestWeekday, '星期排行里更有代表性的结果')
+  ].filter(Boolean).join('');
+
+  return `<div class="cos-card p-5 mb-6">
+    <div class="flex items-start justify-between gap-4 mb-4">
+      <div>
+        <h3 class="text-sm font-semibold text-gray-700">⏰ 发帖时间分析</h3>
+        <div class="text-xs text-gray-400 mt-1">只展示最有参考价值的结论，不再堆完整报表。</div>
+      </div>
+      <div class="text-xs text-gray-400">${H.esc(rows.length + '篇样本 · ' + sampleTip)}</div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">${topCards}</div>
+
+    <div class="rounded-2xl border border-gray-100 bg-gray-50/60 px-4 py-3 flex flex-wrap items-center gap-2 justify-between">
+      <div>
+        <div class="text-sm font-semibold text-gray-800">${H.esc(suggestion)}</div>
+        <div class="text-xs text-gray-400 mt-1">判断依据：平均观看量优先，同时参考中位观看量，避免单篇爆款误导。</div>
+      </div>
+      ${bestContent ? `<button class="cos-btn cos-btn-ghost cos-btn-xs" data-content-trend="${H.esc(bestContent.c.id)}">查看代表内容</button>` : ''}
+    </div>
+
+    <details class="mt-3 rounded-2xl border border-gray-100 bg-white">
+      <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-gray-600 hover:text-gray-900">
+        查看参考依据
+        <span class="text-xs text-gray-400 ml-2">只保留关键判断，不显示完整大表</span>
+      </summary>
+      <div class="border-t border-gray-100 p-4">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          ${evidence || '<div class="text-xs text-gray-400">暂无可参考依据</div>'}
+        </div>
+        <div class="text-xs text-gray-400 mt-3">样本较少时，仅作参考；建议按这个方向连续测试 2-3 周，再看结论是否稳定。</div>
+      </div>
+    </details>
+  </div>`;
+};
+
+
+P._renderAnalyticsAccount = (filtered) => {
+  const groups = {};
+  (filtered || []).forEach(c => {
+    const key = P._contentAccountLabel(c);
+    if(!groups[key]) groups[key] = { label:key, type:P._contentAccountType(c)||'未标注', items:[] };
+    groups[key].items.push(c);
+  });
+  const stats = Object.values(groups).map(g => {
+    const count = g.items.length;
+    const sum = (field) => g.items.reduce((s,c)=>s + P._metricNumber(c.metrics?.[field]), 0);
+    const best = g.items.slice().sort((a,b)=>
+      (P._metricNumber(b.metrics?.views)-P._metricNumber(a.metrics?.views)) ||
+      (P._metricNumber(b.metrics?.exposure)-P._metricNumber(a.metrics?.exposure))
+    )[0];
+    return {
+      ...g,
+      count,
+      avgViews: count ? Math.round(sum('views') / count) : 0,
+      avgExposure: count ? Math.round(sum('exposure') / count) : 0,
+      avgLikes: count ? Math.round(sum('likes') / count) : 0,
+      best
+    };
+  }).sort((a,b)=>(b.avgViews-a.avgViews)||(b.avgExposure-a.avgExposure)||(b.count-a.count));
+
+  if(!stats.length) return '';
+
+  const top = stats.slice(0,3).map((s,i)=>`<div class="rounded-2xl border border-gray-100 bg-white p-4">
+    <div class="flex items-center justify-between gap-2">
+      <div class="min-w-0">
+        <div class="text-sm font-semibold text-gray-800 truncate">${i===0?'🔥 ':''}${H.esc(s.label)}</div>
+        <div class="text-xs text-gray-400 mt-1">${H.esc(s.type)} · ${s.count}篇</div>
+      </div>
+      <div class="text-right">
+        <div class="text-lg font-bold text-gray-900">${H.fmtNum(s.avgViews)}</div>
+        <div class="text-[11px] text-gray-400">均观看</div>
+      </div>
+    </div>
+    ${s.best ? `<div class="text-xs text-gray-400 mt-3 line-clamp-1">代表：<span class="hover:text-blue-600 cursor-pointer" data-content-trend="${H.esc(s.best.id)}">${H.esc(H.truncate(s.best.title,22))}</span></div>` : ''}
+  </div>`).join('');
+
+  return `<div class="cos-card p-5 mb-6">
+    <div class="flex items-center justify-between mb-4">
+      <div>
+        <h3 class="text-sm font-semibold text-gray-700">👥 发布账号分析</h3>
+        <div class="text-xs text-gray-400 mt-1">区分主体账号和小号，避免数据混在一起误判。</div>
+      </div>
+      <span class="text-xs text-gray-400">${stats.length} 个账号</span>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">${top}</div>
+    <details class="mt-3 rounded-2xl border border-gray-100 bg-white">
+      <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-gray-600 hover:text-gray-900">
+        查看全部账号表现
+        <span class="text-xs text-gray-400 ml-2">发布数 / 均观看 / 均曝光 / 均点赞</span>
+      </summary>
+      <div class="border-t border-gray-100 overflow-x-auto">
+        <table class="cos-table">
+          <thead><tr><th>账号</th><th>类型</th><th>发布数</th><th>均观看</th><th>均曝光</th><th>均点赞</th></tr></thead>
+          <tbody>
+            ${stats.map((s,i)=>`<tr>
+              <td class="text-xs text-gray-800">${i===0?'🔥 ':''}${H.esc(s.label)}</td>
+              <td class="text-xs text-gray-500">${H.esc(s.type)}</td>
+              <td class="text-xs text-gray-500">${s.count}篇</td>
+              <td class="text-xs text-gray-700 font-mono">${H.fmtNum(s.avgViews)}</td>
+              <td class="text-xs text-gray-700 font-mono">${H.fmtNum(s.avgExposure)}</td>
+              <td class="text-xs text-gray-700 font-mono">${H.fmtNum(s.avgLikes)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </div>`;
+};
+
+
 P.renderAnalytics = () => {
   const all = S.contents.all();
   const today = H.today();
@@ -6881,16 +7500,28 @@ P.renderAnalytics = () => {
     return;
   }
 
-  // ============ Section 2: 折线趋势图（近30天） ============
-  // 生成近30天每天的聚合数据
-  const last30 = [];
-  for(let i=29; i>=0; i--) {
-    const d = new Date(now.getTime() - i*86400000);
-    last30.push(H.fmtDate(d));
+  // ============ Section 2: 数据波动趋势 ============
+  // 跟随顶部筛选范围变化：近7天显示7天，本月显示本月，全量默认展示最近30天。
+  const trendMeta = (() => {
+    if(P._analyticsRange === '7d') return { days:7, title:'近7天数据波动', hint:'跟随顶部“近7天”筛选' };
+    if(P._analyticsRange === '30d') return { days:30, title:'近30天数据波动', hint:'跟随顶部“近30天”筛选' };
+    if(P._analyticsRange === 'month') {
+      const first = new Date(now.getFullYear(), now.getMonth(), 1);
+      const days = Math.max(1, Math.round((new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() - first.getTime()) / 86400000) + 1);
+      return { days, title:'本月数据波动', hint:'跟随顶部“本月”筛选' };
+    }
+    return { days:30, title:'近30天数据波动', hint:'当前为全部数据，趋势图默认看最近30天' };
+  })();
+
+  const trendDays = [];
+  for(let i=trendMeta.days-1; i>=0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    d.setDate(d.getDate() - i);
+    trendDays.push(H.fmtDate(d));
   }
   const trendByDay = {};
   const contentsByDay = {};
-  last30.forEach(d=>{ trendByDay[d] = { exposure:0, likes:0, comments:0 }; contentsByDay[d] = []; });
+  trendDays.forEach(d=>{ trendByDay[d] = { exposure:0, likes:0, comments:0 }; contentsByDay[d] = []; });
   filtered.forEach(c=>{
     const day = H.parseDate(c.publishDate) || c.publishDate;
     if(contentsByDay[day]) contentsByDay[day].push(c);
@@ -6901,10 +7532,17 @@ P.renderAnalytics = () => {
     }
   });
 
+  const trendPeak = (metricKey) => {
+    const bestDay = trendDays.slice().sort((a,b)=>(trendByDay[b][metricKey]||0)-(trendByDay[a][metricKey]||0))[0];
+    return { day: bestDay, value: bestDay ? (trendByDay[bestDay][metricKey]||0) : 0, count: bestDay ? (contentsByDay[bestDay]||[]).length : 0 };
+  };
+  const peakExposure = trendPeak('exposure');
+  const peakLikes = trendPeak('likes');
+
   const drawLineChart = (data, metricKey, color, metricLabel) => {
     const values = data.map(d=>d.value||0);
     const maxV = Math.max(1, ...values);
-    const W=600, Hh=200, pad=30, w=W-pad*2, h=Hh-pad*2;
+    const W=600, Hh=138, pad=24, w=W-pad*2, h=Hh-pad*2;
     const points = values.map((v,i)=>{
       const x = pad + (i/(values.length-1))*w;
       const y = pad + h - (v/maxV)*h;
@@ -6916,7 +7554,7 @@ P.renderAnalytics = () => {
       <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="#fff" stroke="${color}" stroke-width="2"/>
       <circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="12" fill="transparent" stroke="transparent"/>
     </g>`).join('');
-    return `<svg width="100%" viewBox="0 0 ${W} ${Hh}" class="overflow-visible" style="max-height:200px">
+    return `<svg width="100%" viewBox="0 0 ${W} ${Hh}" class="overflow-visible" style="max-height:138px">
       <defs><linearGradient id="grad_${metricKey}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity="0.3"/><stop offset="100%" stop-color="${color}" stop-opacity="0.02"/></linearGradient></defs>
       <path d="${area}" fill="url(#grad_${metricKey})" stroke="none"/>
       <path d="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -6924,14 +7562,30 @@ P.renderAnalytics = () => {
     </svg>`;
   };
 
-  html += '<div class="cos-card p-5 mb-6"><div class="flex items-center justify-between mb-4"><h3 class="text-sm font-semibold text-gray-700">📈 近30天趋势</h3><span class="text-xs text-gray-400">点击峰值点查看当天内容</span></div>';
-  html += '<div class="grid grid-cols-1 md:grid-cols-3 gap-4">';
-  html += `<div><div class="text-xs text-gray-400 mb-1">曝光趋势</div>${drawLineChart(last30.map(d=>({value:trendByDay[d].exposure,label:d})),'exposure','#3b82f6','曝光')}</div>`;
-  html += `<div><div class="text-xs text-gray-400 mb-1">点赞趋势</div>${drawLineChart(last30.map(d=>({value:trendByDay[d].likes,label:d})),'likes','#ec4899','点赞')}</div>`;
-  html += `<div><div class="text-xs text-gray-400 mb-1">评论趋势</div>${drawLineChart(last30.map(d=>({value:trendByDay[d].comments,label:d})),'comments','#10b981','评论')}</div>`;
-  html += '</div><div id="analytics-trend-detail" class="hidden mt-4 rounded-xl border border-dashed border-gray-200 bg-gray-50/60 p-4 text-sm text-gray-400 text-center"></div></div>';
+  html += `<div class="cos-card p-4 mb-5">
+    <div class="flex items-start justify-between gap-4 mb-3">
+      <div>
+        <h3 class="text-sm font-semibold text-gray-700">📈 ${H.esc(trendMeta.title)}</h3>
+        <div class="text-xs text-gray-400 mt-1">${H.esc(trendMeta.hint)} · 点击折线点查看当天内容</div>
+      </div>
+      <div class="hidden md:flex items-center gap-2 text-xs">
+        <span class="rounded-lg bg-blue-50 text-blue-600 px-2.5 py-1">曝光峰值 ${H.showDate(peakExposure.day)} · ${H.fmtNum(peakExposure.value)}</span>
+        <span class="rounded-lg bg-pink-50 text-pink-600 px-2.5 py-1">点赞峰值 ${H.showDate(peakLikes.day)} · ${H.fmtNum(peakLikes.value)}</span>
+      </div>
+    </div>`;
+  html += '<div class="grid grid-cols-1 md:grid-cols-3 gap-3">';
+  html += `<div><div class="text-xs text-gray-400 mb-0.5">曝光</div>${drawLineChart(trendDays.map(d=>({value:trendByDay[d].exposure,label:d})),'exposure','#3b82f6','曝光')}</div>`;
+  html += `<div><div class="text-xs text-gray-400 mb-0.5">点赞</div>${drawLineChart(trendDays.map(d=>({value:trendByDay[d].likes,label:d})),'likes','#ec4899','点赞')}</div>`;
+  html += `<div><div class="text-xs text-gray-400 mb-0.5">评论</div>${drawLineChart(trendDays.map(d=>({value:trendByDay[d].comments,label:d})),'comments','#10b981','评论')}</div>`;
+  html += '</div><div id="analytics-trend-detail" class="hidden mt-3 rounded-xl border border-dashed border-gray-200 bg-gray-50/60 p-4 text-sm text-gray-400 text-center"></div></div>';
 
-  // ============ Section 3: 爆款 TOP10 ============
+  // ============ Section 3: 发帖时间分析 ============
+  html += P._renderAnalyticsPublishTime(filtered);
+
+  // ============ Section 4: 发布账号分析 ============
+  html += P._renderAnalyticsAccount(filtered);
+
+  // ============ Section 5: 爆款 TOP10 ============
   const sortLabels = { exposure:'曝光排行', likes:'点赞排行', comments:'评论排行' };
   html += '<div class="cos-card p-5 mb-6"><div class="flex items-center justify-between mb-4"><h3 class="text-sm font-semibold text-gray-700">🏆 爆款 TOP10</h3><div class="flex gap-1">';
   Object.entries(sortLabels).forEach(([k,v])=>{
@@ -7151,6 +7805,358 @@ P.renderAnalytics = () => {
   });
 };
 
+
+// ==================== 渠道分发记录 ====================
+
+P._CHANNEL_STORAGE_KEY = 'content_os_channel_records_v1';
+P._channelFilter = P._channelFilter || 'all';
+P._channelSearch = P._channelSearch || '';
+
+P._channelOptions = () => {
+  const arr = S?.config?.getChannels ? S.config.getChannels() : [];
+  return Array.isArray(arr) && arr.length ? arr : [...C.DEFAULT_CHANNELS];
+};
+P._channelStatusOptions = ['正常','已删帖','被屏蔽','待观察'];
+P._channelRatingOptions = ['好','一般','差','待观察'];
+
+P._channelReadLocal = () => {
+  try {
+    const raw = localStorage.getItem(P._CHANNEL_STORAGE_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr : [];
+  } catch(e) {
+    console.warn('渠道分发记录读取失败', e);
+    return [];
+  }
+};
+
+P._channelSyncToCloud = async (items) => {
+  const safeItems = Array.isArray(items) ? items : [];
+  try {
+    if(S?.db?.config) S.db.config.channelRecords = safeItems;
+    if(typeof SUPABASE !== 'undefined' && SUPABASE?.from) {
+      const { error } = await SUPABASE
+        .from('config')
+        .upsert({ key:'channelRecords', value:safeItems }, { onConflict:'key' });
+      if(error) {
+        console.warn('渠道分发记录云端保存失败：', error.message);
+        return false;
+      }
+      return true;
+    }
+    return false;
+  } catch(e) {
+    console.warn('渠道分发记录云端保存异常', e);
+    return false;
+  }
+};
+
+P._channelLoad = () => {
+  const localItems = P._channelReadLocal();
+  const cloudItems = S?.db?.config?.channelRecords;
+  if(Array.isArray(cloudItems) && cloudItems.length) {
+    try { localStorage.setItem(P._CHANNEL_STORAGE_KEY, JSON.stringify(cloudItems)); } catch(_) {}
+    return cloudItems;
+  }
+  if(localItems.length && S?.db?.config && (!Array.isArray(cloudItems) || cloudItems.length === 0)) {
+    P._channelSyncToCloud(localItems);
+  }
+  return Array.isArray(cloudItems) ? cloudItems : localItems;
+};
+
+P._channelSave = async (items) => {
+  const safeItems = Array.isArray(items) ? items : [];
+  try { localStorage.setItem(P._CHANNEL_STORAGE_KEY, JSON.stringify(safeItems)); }
+  catch(e) { UI.toast('分发记录本地保存失败：' + e.message, 'error'); }
+  const cloudOK = await P._channelSyncToCloud(safeItems);
+  return { localOK:true, cloudOK, total:safeItems.length };
+};
+
+P._channelNum = (v) => {
+  const n = parseInt(String(v || '').replace(/[^\d]/g,''), 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
+P._channelRatingBadge = (rating) => {
+  const r = rating || '待观察';
+  if(r === '好') return '<span class="diag-badge diag-ok">效果好</span>';
+  if(r === '差') return '<span class="diag-badge diag-danger">效果差</span>';
+  if(r === '一般') return '<span class="diag-badge diag-warn">一般</span>';
+  return '<span class="diag-badge diag-info">待观察</span>';
+};
+
+P._channelStatusBadge = (status) => {
+  const s = status || '正常';
+  if(s === '已删帖' || s === '被屏蔽') return `<span class="diag-badge diag-danger">${H.esc(s)}</span>`;
+  if(s === '待观察') return '<span class="diag-badge diag-warn">待观察</span>';
+  return '<span class="diag-badge diag-ok">正常</span>';
+};
+
+P._channelLinkedContentTitle = (record) => {
+  if(!record?.contentId) return '';
+  const c = S.contents.get(record.contentId);
+  return c?.title || '';
+};
+
+P._channelEffectiveTitle = (record) => record.title || P._channelLinkedContentTitle(record) || '未命名发布记录';
+
+P._channelRecordScore = (r) => {
+  return P._channelNum(r.leads) * 5 + P._channelNum(r.groupAdds) * 8 + P._channelNum(r.downloads) * 10 + P._channelNum(r.comments) * 2 + P._channelNum(r.views) * 0.01;
+};
+
+P._channelStats = (items) => {
+  const total = items.length;
+  const leads = items.reduce((s,r)=>s+P._channelNum(r.leads),0);
+  const groupAdds = items.reduce((s,r)=>s+P._channelNum(r.groupAdds),0);
+  const downloads = items.reduce((s,r)=>s+P._channelNum(r.downloads),0);
+  const blocked = items.filter(r=>['已删帖','被屏蔽'].includes(r.status)).length;
+  const byChannel = {};
+  items.forEach(r=>{
+    const k = r.channel || '其他';
+    if(!byChannel[k]) byChannel[k] = { channel:k, count:0, leads:0, groupAdds:0, downloads:0, views:0 };
+    byChannel[k].count += 1;
+    byChannel[k].leads += P._channelNum(r.leads);
+    byChannel[k].groupAdds += P._channelNum(r.groupAdds);
+    byChannel[k].downloads += P._channelNum(r.downloads);
+    byChannel[k].views += P._channelNum(r.views);
+  });
+  const topChannel = Object.values(byChannel).sort((a,b)=>
+    (b.leads+b.groupAdds*2+b.downloads*3) - (a.leads+a.groupAdds*2+a.downloads*3)
+  )[0] || null;
+  return { total, leads, groupAdds, downloads, blocked, topChannel, byChannel:Object.values(byChannel) };
+};
+
+P.renderChannels = () => {
+  const all = P._channelLoad();
+  const contents = S.contents.all();
+  let items = [...all];
+
+  if(P._channelFilter !== 'all') items = items.filter(r => (r.channel || '其他') === P._channelFilter);
+  if(P._channelSearch) {
+    const q = P._channelSearch.toLowerCase();
+    items = items.filter(r => [
+      r.channel, r.publishAccount, r.accountType, r.title, r.bodyText, r.postLink,
+      r.notes, r.status, r.rating, P._channelLinkedContentTitle(r)
+    ].map(v=>String(v||'')).join(' ').toLowerCase().includes(q));
+  }
+
+  items = items.sort((a,b)=>{
+    const da = String(a.publishDate || '') + ' ' + String(a.publishTime || '');
+    const db = String(b.publishDate || '') + ' ' + String(b.publishTime || '');
+    if(da !== db) return db.localeCompare(da);
+    return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+  });
+
+  const stats = P._channelStats(items);
+  const allStats = P._channelStats(all);
+  const configuredChannels = P._channelOptions();
+  const usedChannels = [...new Set(all.map(r=>r.channel).filter(Boolean))];
+  const channelTabs = ['all', ...new Set([...configuredChannels, ...usedChannels])];
+
+  const actionsEl = document.getElementById('page-actions');
+  if(actionsEl) actionsEl.innerHTML = `<button class="cos-btn cos-btn-primary cos-btn-sm" id="channel-add-btn">+ 新增分发记录</button>`;
+
+  let html = `<div class="space-y-4">
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div class="cos-card p-3"><div class="text-xs text-gray-500">发布记录</div><div class="text-lg font-semibold text-gray-900">${stats.total}</div></div>
+      <div class="cos-card p-3"><div class="text-xs text-gray-500">引流用户</div><div class="text-lg font-semibold text-brand-600">${H.fmtNum(stats.leads)}</div></div>
+      <div class="cos-card p-3"><div class="text-xs text-gray-500">进群人数</div><div class="text-lg font-semibold text-emerald-600">${H.fmtNum(stats.groupAdds)}</div></div>
+      <div class="cos-card p-3"><div class="text-xs text-gray-500">下载人数</div><div class="text-lg font-semibold text-blue-600">${H.fmtNum(stats.downloads)}</div></div>
+      <div class="cos-card p-3"><div class="text-xs text-gray-500">被删/屏蔽</div><div class="text-lg font-semibold text-red-500">${stats.blocked}</div></div>
+    </div>
+
+    <div class="cos-card p-4">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+          ${channelTabs.map(ch=>`<button class="px-3 py-1 rounded-md text-xs font-medium ${P._channelFilter===ch?'bg-white shadow-sm text-gray-900':'text-gray-500 hover:text-gray-700'}" data-channel-filter="${H.esc(ch)}">${ch==='all'?'全部渠道':H.esc(ch)}</button>`).join('')}
+        </div>
+        <div class="relative ml-auto">
+          <input class="cos-input cos-input-sm pl-8" id="channel-search" style="width:240px" placeholder="搜索标题/账号/话术..." value="${H.esc(P._channelSearch || '')}">
+          <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+        </div>
+      </div>
+      ${allStats.topChannel ? `<div class="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-700">
+        当前表现较好的渠道：<b>${H.esc(allStats.topChannel.channel)}</b> · 引流 ${H.fmtNum(allStats.topChannel.leads)} · 进群 ${H.fmtNum(allStats.topChannel.groupAdds)} · 下载 ${H.fmtNum(allStats.topChannel.downloads)}
+      </div>` : ''}
+      <div class="mt-2 text-xs text-gray-400">发布渠道可在「系统设置 → 配置中心 → 发布渠道」中维护。</div>
+    </div>`;
+
+  if(items.length === 0) {
+    html += UI.emptyState(all.length ? '没有匹配的渠道分发记录' : '还没有渠道分发记录，可以先记录 QQ 自驾游频道/微信群发过的帖子', '<button class="cos-btn cos-btn-primary cos-btn-sm" id="channel-empty-add">新增渠道记录</button>');
+  } else {
+    html += `<div class="grid grid-cols-1 xl:grid-cols-2 gap-3">`;
+    items.forEach(r => {
+      const title = P._channelEffectiveTitle(r);
+      const linkedTitle = P._channelLinkedContentTitle(r);
+      html += `<div class="cos-card p-4 hover:shadow-sm transition-shadow">
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0 flex-1">
+            <div class="flex flex-wrap items-center gap-2 mb-1.5">
+              <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${H.esc(r.channel || '其他')}</span>
+              ${P._channelStatusBadge(r.status)}
+              ${P._channelRatingBadge(r.rating)}
+              ${r.publishAccount ? `<span class="text-xs text-gray-400">${H.esc(r.publishAccount)}</span>` : ''}
+            </div>
+            <div class="text-sm font-semibold text-gray-900 line-clamp-1">${H.esc(title)}</div>
+            ${linkedTitle && r.title ? `<div class="text-xs text-gray-400 mt-0.5 line-clamp-1">关联内容：${H.esc(linkedTitle)}</div>` : ''}
+            ${r.bodyText ? `<div class="text-xs text-gray-500 mt-2 line-clamp-2 leading-5">${H.esc(r.bodyText)}</div>` : ''}
+          </div>
+          <div class="text-xs text-gray-400 whitespace-nowrap">${H.showDate(r.publishDate)} ${H.esc(r.publishTime || '')}</div>
+        </div>
+
+        <div class="grid grid-cols-5 gap-2 mt-3 text-center">
+          <div class="rounded-lg bg-gray-50 p-2"><div class="text-sm font-semibold text-gray-800">${H.fmtNum(P._channelNum(r.views))}</div><div class="text-[11px] text-gray-400">浏览</div></div>
+          <div class="rounded-lg bg-gray-50 p-2"><div class="text-sm font-semibold text-gray-800">${H.fmtNum(P._channelNum(r.likes))}</div><div class="text-[11px] text-gray-400">点赞</div></div>
+          <div class="rounded-lg bg-brand-50 p-2"><div class="text-sm font-semibold text-brand-600">${H.fmtNum(P._channelNum(r.leads))}</div><div class="text-[11px] text-gray-400">引流</div></div>
+          <div class="rounded-lg bg-emerald-50 p-2"><div class="text-sm font-semibold text-emerald-600">${H.fmtNum(P._channelNum(r.groupAdds))}</div><div class="text-[11px] text-gray-400">进群</div></div>
+          <div class="rounded-lg bg-blue-50 p-2"><div class="text-sm font-semibold text-blue-600">${H.fmtNum(P._channelNum(r.downloads))}</div><div class="text-[11px] text-gray-400">下载</div></div>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-1.5 pt-3 mt-3 border-t border-gray-100">
+          ${r.postLink ? `<a class="cos-btn cos-btn-ghost cos-btn-xs" href="${H.esc(r.postLink)}" target="_blank">打开链接</a>` : ''}
+          <button class="cos-btn cos-btn-ghost cos-btn-xs" data-channel-edit="${H.esc(r.id)}">编辑</button>
+          <button class="cos-btn cos-btn-ghost cos-btn-xs text-red-500" data-channel-delete="${H.esc(r.id)}">删除</button>
+          ${r.notes ? `<span class="text-xs text-gray-400 ml-auto line-clamp-1">备注：${H.esc(H.truncate(r.notes, 32))}</span>` : ''}
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  document.getElementById('page-body').innerHTML = html;
+
+  document.getElementById('channel-add-btn')?.addEventListener('click', () => P._openChannelModal());
+  document.getElementById('channel-empty-add')?.addEventListener('click', () => P._openChannelModal());
+  document.querySelectorAll('[data-channel-filter]').forEach(btn => btn.onclick = () => {
+    P._channelFilter = btn.dataset.channelFilter;
+    P.renderChannels();
+  });
+  const search = document.getElementById('channel-search');
+  if(search) {
+    let timer;
+    search.oninput = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        P._channelSearch = search.value.trim();
+        P.renderChannels();
+      }, 250);
+    };
+  }
+  document.querySelectorAll('[data-channel-edit]').forEach(btn => btn.onclick = () => P._openChannelModal(btn.dataset.channelEdit));
+  document.querySelectorAll('[data-channel-delete]').forEach(btn => btn.onclick = async () => {
+    const ok = await UI.confirm('删除分发记录','确定删除这条渠道分发记录？',{danger:true,confirmText:'删除'});
+    if(!ok) return;
+    const items = P._channelLoad().filter(x => x.id !== btn.dataset.channelDelete);
+    await P._channelSave(items);
+    UI.toast('分发记录已删除');
+    P.renderChannels();
+  });
+};
+
+P._openChannelModal = async (recordId=null) => {
+  const isEdit = !!recordId;
+  const items = P._channelLoad();
+  const r = isEdit ? items.find(x => x.id === recordId) : {};
+  if(isEdit && !r) return;
+
+  const channelOptions = P._channelOptions();
+  const contents = S.contents.all().slice().sort((a,b)=>String(b.publishDate||'').localeCompare(String(a.publishDate||'')));
+  const contentOpts = ['<option value="">不关联内容库</option>'].concat(contents.slice(0,80).map(c =>
+    `<option value="${H.esc(c.id)}" ${(r.contentId||'')===c.id?'selected':''}>${H.esc(H.truncate(c.title, 40))}</option>`
+  )).join('');
+
+  const html = `<div class="p-6">
+    <h2 class="text-base font-semibold text-gray-900 mb-5">${isEdit?'编辑分发记录':'新增分发记录'}</h2>
+    <form id="channel-form" class="space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div>${UI.renderField('发布渠道','channel','select',r.channel||channelOptions[0]||'其他',channelOptions,'选择渠道')}</div>
+        <div>${UI.renderField('发布账号','publishAccount','text',r.publishAccount||'',null,'个人号 / 主体号 / 小号A')}</div>
+      </div>
+      <div>
+        <label class="cos-label">关联内容库</label>
+        <select class="cos-select" name="contentId">${contentOpts}</select>
+      </div>
+      <div>${UI.renderField('帖子标题','title','text',r.title||'',null,'这次在渠道里发的标题')}</div>
+      <div>${UI.renderField('发布内容 / 话术','bodyText','textarea',r.bodyText||'',null,'粘贴你发在 QQ 频道/群里的内容')}</div>
+      <div class="grid grid-cols-3 gap-4">
+        <div>${UI.renderField('发布日期','publishDate','date',r.publishDate||H.today())}</div>
+        <div>${UI.renderField('发布时间','publishTime','time',r.publishTime||'')}</div>
+        <div>${UI.renderField('帖子链接','postLink','url',r.postLink||'',null,'https://...')}</div>
+      </div>
+      <div class="border-t pt-3"><h3 class="text-sm font-semibold text-gray-700 mb-3">渠道数据</h3></div>
+      <div class="grid grid-cols-3 gap-4">
+        <div>${UI.renderField('浏览量','views','number',String(r.views||0))}</div>
+        <div>${UI.renderField('点赞','likes','number',String(r.likes||0))}</div>
+        <div>${UI.renderField('评论/回复','comments','number',String(r.comments||0))}</div>
+        <div>${UI.renderField('引流用户','leads','number',String(r.leads||0))}</div>
+        <div>${UI.renderField('进群人数','groupAdds','number',String(r.groupAdds||0))}</div>
+        <div>${UI.renderField('下载人数','downloads','number',String(r.downloads||0))}</div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>${UI.renderField('状态','status','select',r.status||'正常',P._channelStatusOptions)}</div>
+        <div>${UI.renderField('效果评级','rating','select',r.rating||'待观察',P._channelRatingOptions)}</div>
+      </div>
+      <div>${UI.renderField('备注','notes','textarea',r.notes||'',null,'例如：这条话术容易被删 / 有人私信咨询')}</div>
+      <div class="flex justify-end gap-3 pt-2">
+        <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+        <button type="button" class="cos-btn cos-btn-primary" id="channel-save-btn">保存</button>
+      </div>
+    </form>
+  </div>`;
+
+  const modalPromise = UI.openModal(html, {width:'max-w-4xl'});
+  setTimeout(() => {
+    const saveBtn = document.getElementById('channel-save-btn');
+    if(saveBtn) saveBtn.onclick = () => {
+      const form = document.getElementById('channel-form');
+      if(!form) return;
+      const data = UI.readForm(form);
+      if(!String(data.title || '').trim() && !data.contentId) {
+        UI.toast('请填写帖子标题，或关联一篇内容库内容', 'error');
+        return;
+      }
+      UI.closeModal(data);
+    };
+  }, 50);
+
+  const result = await modalPromise;
+  if(!result || result === 'cancel') return;
+  const data = result;
+
+  const now = H.nowISO();
+  const record = {
+    ...(r || {}),
+    id: r?.id || H.uid('ch_'),
+    channel: data.channel || '其他',
+    publishAccount: String(data.publishAccount || '').trim(),
+    contentId: data.contentId || '',
+    title: String(data.title || '').trim(),
+    bodyText: data.bodyText || '',
+    publishDate: H.parseDate(data.publishDate) || H.today(),
+    publishTime: P._normalizePublishTime ? P._normalizePublishTime(data.publishTime || '') : (data.publishTime || ''),
+    postLink: data.postLink || '',
+    views: P._channelNum(data.views),
+    likes: P._channelNum(data.likes),
+    comments: P._channelNum(data.comments),
+    leads: P._channelNum(data.leads),
+    groupAdds: P._channelNum(data.groupAdds),
+    downloads: P._channelNum(data.downloads),
+    status: data.status || '正常',
+    rating: data.rating || '待观察',
+    notes: data.notes || '',
+    createdAt: r?.createdAt || now,
+    updatedAt: now
+  };
+
+  const next = items.filter(x => x.id !== record.id);
+  next.push(record);
+  await P._channelSave(next);
+  UI.toast(isEdit ? '分发记录已更新' : '分发记录已保存');
+  P.renderChannels();
+};
+
+
 // ==================== 页面路由表 ====================
 
 P.routes = {
@@ -7160,6 +8166,7 @@ P.routes = {
   topics:   () => { P._setHeader('选题库', '管理内容选题与优先级'); P.renderTopicsPage(); },
   contents: () => { P._setHeader('内容库', '已完成内容的归档管理'); P.renderContentsPage(); },
   calendar:   () => { P._setHeader('内容日历', '排期与发布计划'); P.renderCalendarPage(); },
+  channels:   () => { P._setHeader('渠道分发记录', '记录 QQ频道/社群分发 · 复盘引流效果'); P.renderChannels(); },
   'content-center': () => { P._setHeader('选题库', '管理内容选题与优先级'); P.renderTopicsPage(); },
   analytics:  () => { P._setHeader('数据分析', '运营数据可视化'); P.renderAnalytics(); },
   users:      () => { P._setHeader('内测用户', '用户投放管理与追踪'); P.renderUsers(); },
@@ -7218,7 +8225,7 @@ R.initSidebar = () => {
 // 旧路由 → 侧边栏高亮映射
 R._routeToNav = {
   inspirations:'inspirations',
-  topics:'topics', contents:'contents', calendar:'calendar',
+  topics:'topics', contents:'contents', calendar:'calendar', channels:'channels',
   'content-center':'topics',
   analytics:'analytics', users:'users', knowledge:'knowledge',
   backups:'settings', settings:'settings', data:'settings',
