@@ -1979,15 +1979,149 @@ P._renderContentDiagBadges = (c) => {
   return `<div class="mt-1 flex flex-wrap gap-1"><span class="diag-badge ${cls}">${H.esc(d.label)}</span>${(d.tags||[]).slice(0,2).map(t=>`<span class="diag-badge diag-info">${H.esc(t)}</span>`).join('')}</div>`;
 };
 
+P._hotspotCleanKeyword = (h) => {
+  return String(h?.keyword || h?.title || '')
+    .replace(/^#+/, '')
+    .replace(/计划|攻略|清单|路线|打卡|自驾游?|旅行|旅游/g, (m)=>m)
+    .trim();
+};
+
+P._hotspotGuessCity = (text) => {
+  const cities = ['杭州','上海','苏州','南京','宁波','绍兴','湖州','嘉兴','义乌','厦门','青岛','重庆','成都','大理','丽江','福州','平潭','武汉','长沙','广州','深圳','北京','西安','兰州','西宁','张掖','敦煌','吐鲁番','新疆','大西北','青甘'];
+  return cities.find(c => String(text || '').includes(c)) || '';
+};
+
+P._hotspotFitExamples = (keyword, text) => {
+  const city = P._hotspotGuessCity(text);
+  const from = city ? `${city}出发` : '杭州出发';
+  const k = keyword || '这个热点';
+
+  if(/周末|双休|休息日|短途|逃离|附近|2h|2小时|两小时/.test(text)) {
+    return [
+      `2小时自驾圈，真的很适合周末逃跑`,
+      `周末不知道去哪？让 AI 帮我排了一条线`,
+      `${from} 2h 周末自驾`
+    ];
+  }
+  if(/三伏|清凉|避暑|高温|夏天|玩水|漂流|海边|看海|湿气|祛湿/.test(text)) {
+    return [
+      `三伏天不想闷在城里，去山里/水边降温`,
+      `${from}避暑自驾路线，周末就能走`,
+      `夏天自驾别硬扛，直接去这些清凉点`
+    ];
+  }
+  if(/毕业|学生|暑假|青春|年轻|自由/.test(text)) {
+    return [
+      `毕业旅行第一站，不一定要去最远的地方`,
+      `刚毕业想认真旅行一次，可以这样规划路线`,
+      `预算有限也能冲的毕业自驾清单`
+    ];
+  }
+  if(/快乐|开心|时光|分享|生活|松弛|治愈|浪漫|自由|风/.test(text)) {
+    return [
+      `把快乐时光做成一条可复制的自驾路线`,
+      `不是目的地多贵，是路上的瞬间很治愈`,
+      `适合发朋友圈的小众自驾打卡点`
+    ];
+  }
+  if(/亲子|孩子|家庭|爸妈|父亲|妈妈|老人|长辈/.test(text)) {
+    return [
+      `带爸妈/孩子出门，路线别太累才是重点`,
+      `适合全家一起去的轻松自驾路线`,
+      `不赶路、不折腾的家庭周末自驾`
+    ];
+  }
+  if(/情侣|约会|喜欢|暗恋|恋爱|对象|男友|女友/.test(text)) {
+    return [
+      `适合情侣一起去的短途自驾路线`,
+      `不用太远，也能过一个很像约会的周末`,
+      `把喜欢的人带去这些有氛围的地方`
+    ];
+  }
+  if(/美食|吃货|夜市|咖啡|小吃|饭店|餐厅/.test(text)) {
+    return [
+      `为了吃也值得跑一趟的城市自驾路线`,
+      `一天吃几家，把城市美食串成路线`,
+      `吃货周末自驾，不赶景点只赶饭点`
+    ];
+  }
+  if(/电影|电视剧|综艺|音乐|演唱会|取景|同款|一首歌/.test(text)) {
+    return [
+      `跟着这部剧/这首歌去旅行，顺路打卡同款城市`,
+      `把追剧情绪做成一条自驾路线`,
+      `同款取景地打卡，适合做小红书路线图`
+    ];
+  }
+  if(/AI|智能|助手|攻略|规划|路线|导航|痛点|功能/.test(text)) {
+    return [
+      `不用做攻略，让 AI 直接排一条自驾路线`,
+      `自驾前最麻烦的路线/停车/时间安排，可以交给 AI`,
+      `把用户痛点做成 AI 自驾功能种草内容`
+    ];
+  }
+
+  return [
+    `${k} 可以转成“城市打卡 + 自驾路线”的内容`,
+    `从 ${k} 的情绪切入，落到具体路线/地点清单`,
+    `适合做一篇可收藏的周末自驾攻略`
+  ];
+};
+
 P._hotspotFitReason = (h) => {
   const score = Number(h.fitScore) || 0;
-  const text = `${h.keyword||''} ${h.title||''} ${h.category||''}`;
-  if(score >= 75) return `高适配：这个热点和旅行/城市/自驾的关联强，适合优先生成选题。`;
-  if(score >= 60) return `值得跟进：可以从“${h.keyword || h.title} + 自驾路线/城市打卡/旅行情绪”切入。`;
-  if(/[美食|夜宵|咖啡|夜市]/.test(text)) return '可转城市漫游：适合结合夜市、小吃街、咖啡店和城市一日路线。';
-  if(/[电影|电视剧|综艺|音乐|演唱会]/.test(text)) return '可转取景地/同款路线：适合做“跟着热点去旅行”。';
-  return '适配一般：建议先收藏观察，除非能找到明确的城市、路线或自驾角度。';
+  const keyword = P._hotspotCleanKeyword(h);
+  const text = `${h?.keyword||''} ${h?.title||''} ${h?.category||''} ${h?.angle||''}`;
+  const examples = P._hotspotFitExamples(keyword, text).map(x => `【${x}】`).join('、');
+
+  if(/周末|双休|休息日|短途|逃离|附近|2h|2小时|两小时/.test(text)) {
+    return `适合从“周末短途逃离/2小时自驾圈/城市周边打卡”切入。比如：${examples}。`;
+  }
+  if(/三伏|清凉|避暑|高温|夏天|玩水|漂流|海边|看海|湿气|祛湿/.test(text)) {
+    return `适合从“夏天避暑/玩水/清凉自驾路线”切入，把热点变成可直接出发的路线清单。比如：${examples}。`;
+  }
+  if(/毕业|学生|暑假|青春|年轻|自由/.test(text)) {
+    return `适合从“毕业旅行/预算有限/第一次认真旅行”切入，做成路线、费用和避坑型内容。比如：${examples}。`;
+  }
+  if(/快乐|开心|时光|分享|生活|松弛|治愈|浪漫|自由|风/.test(text)) {
+    return `适合从“旅行情绪/路上的快乐瞬间/松弛感自驾”切入，不只写景点，更写出发理由。比如：${examples}。`;
+  }
+  if(/亲子|孩子|家庭|爸妈|父亲|妈妈|老人|长辈/.test(text)) {
+    return `适合从“家庭轻松出行/不累人的自驾路线/带爸妈孩子去哪”切入，强调少折腾和好安排。比如：${examples}。`;
+  }
+  if(/情侣|约会|喜欢|暗恋|恋爱|对象|男友|女友/.test(text)) {
+    return `适合从“情侣周末约会/氛围感目的地/短途自驾”切入，做成更有情绪的打卡路线。比如：${examples}。`;
+  }
+  if(/美食|吃货|夜市|咖啡|小吃|饭店|餐厅/.test(text)) {
+    return `适合从“美食自驾/城市吃货路线/夜市咖啡打卡”切入，把吃喝地点串成一条路线。比如：${examples}。`;
+  }
+  if(/电影|电视剧|综艺|音乐|演唱会|取景|同款|一首歌/.test(text)) {
+    return `适合从“跟着影视/音乐去旅行/同款取景地打卡”切入，和你的剧综旅行内容很匹配。比如：${examples}。`;
+  }
+  if(/AI|智能|助手|攻略|规划|路线|导航|痛点|功能/.test(text)) {
+    return `适合从“自驾痛点 + AI 路线规划/攻略生成”切入，能自然带到产品功能。比如：${examples}。`;
+  }
+  if(/[美食|夜宵|咖啡|夜市]/.test(text)) {
+    return `可转城市漫游：适合结合夜市、小吃街、咖啡店和城市一日路线。比如：${examples}。`;
+  }
+  if(/[电影|电视剧|综艺|音乐|演唱会]/.test(text)) {
+    return `可转取景地/同款路线：适合做“跟着热点去旅行”。比如：${examples}。`;
+  }
+  if(score >= 75) return `高适配：这个热点和旅行/城市/自驾的关联强，可以优先做成具体路线或目的地清单。比如：${examples}。`;
+  if(score >= 60) return `值得跟进：可以从“${keyword} + 自驾路线/城市打卡/旅行情绪”切入。比如：${examples}。`;
+  return `适配一般：建议先观察，除非能找到明确的城市、路线或自驾角度。可尝试：${examples}。`;
 };
+
+P._hotspotShortFitReason = (h) => {
+  const reason = String(h?.fitReason || P._hotspotFitReason(h) || '').trim();
+  if(!reason) return '';
+  return reason
+    .replace(/^适配理由[：:]\s*/, '')
+    .replace(/。比如[：:]?.*$/,'。')
+    .replace(/比如[：:]?.*$/,'')
+    .replace(/。可尝试[：:]?.*$/,'。')
+    .trim();
+};
+
 
 P._syncStatus = () => {
   let lastCloud = '', lastHot = '', hotStatus = '', hotErr = '';
@@ -2068,9 +2202,12 @@ P.renderWorkbench = () => {
       <div class="cos-card p-5">
         <div class="flex items-center justify-between mb-3"><h3 class="text-sm font-semibold text-gray-800">🔥 值得跟进热点</h3><button class="cos-btn cos-btn-ghost cos-btn-xs" data-route-jump="hotspots">全部</button></div>
         <div class="ops-mini-list">${worthHotspots.length ? worthHotspots.map(h=>`
-          <div class="rounded-xl border border-gray-100 p-3">
-            <div class="flex items-center gap-2"><div class="text-sm font-semibold text-gray-900 flex-1 truncate">${H.esc(h.keyword||h.title)}</div><span class="diag-badge ${Number(h.fitScore)>=75?'diag-danger':'diag-ok'}">${H.esc(P._hotspotFitLabel(h.fitScore,h.fitLevel))}</span></div>
-            <div class="text-xs text-gray-500 mt-1">${H.esc(h.fitReason || P._hotspotFitReason(h))}</div>
+          <div class="rounded-xl border border-gray-100 p-3 hover:bg-gray-50/60 transition">
+            <div class="flex items-center gap-2">
+              <div class="text-sm font-semibold text-gray-900 flex-1 truncate">${H.esc(h.keyword||h.title)}</div>
+              <span class="diag-badge ${Number(h.fitScore)>=75?'diag-danger':'diag-ok'} whitespace-nowrap">${H.esc(P._hotspotFitLabel(h.fitScore,h.fitLevel))}</span>
+            </div>
+            <div class="text-xs text-gray-500 mt-1 line-clamp-2">${H.esc(P._hotspotShortFitReason(h))}</div>
           </div>`).join('') : '<div class="text-sm text-gray-400 py-6 text-center">暂无值得跟进热点</div>'}</div>
         ${expiredHotspots.length ? `<div class="mt-3 pt-3 border-t border-gray-100 text-xs text-amber-600">还有 ${expiredHotspots.length} 个热点已超过 3 天未处理，已自动降权。<button class="ml-1 underline" data-route-jump="hotspots">去处理</button></div>` : ''}
       </div>
@@ -2446,38 +2583,48 @@ P.renderHotspots = () => {
     if(P._hotspotSearch) html += UI.emptyState('没有找到匹配的热点', '<button class="cos-btn cos-btn-secondary cos-btn-sm" id="hotspot-empty-clear">清空搜索</button>');
     else html += UI.emptyState('还没有热点数据，先粘贴导入一批小红书/抖音热点吧', '<button class="cos-btn cos-btn-primary cos-btn-sm" id="empty-hotspot-paste">粘贴导入热点</button>');
   } else {
-    html += `<div class="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">`;
-    items.forEach(h => {
-      html += `<div class="cos-card hotspot-card ${h._expired?'hotspot-expired':P._hotspotCardClass(h.fitScore)} p-4 h-full flex flex-col">
-        <div class="min-w-0 flex-1">
-          <div class="flex flex-wrap items-center gap-2 mb-1.5">
+    html += `<div class="cos-card p-0 overflow-hidden">
+      <div class="grid grid-cols-[64px_1fr_140px_180px] gap-3 px-4 py-2.5 text-xs text-gray-400 border-b border-gray-100 bg-gray-50/70">
+        <div>排名</div><div>热点</div><div>适配度</div><div class="text-right">操作</div>
+      </div>`;
+    items.forEach((h,idx) => {
+      const rankNo = idx + 1;
+      const hotRank = h.rank ? `#${H.esc(h.rank)}` : `#${rankNo}`;
+      const reason = P._hotspotShortFitReason(h);
+      const heat = h.views
+        ? `浏览 ${P._hotspotFormatNumberText(Number(h.views)||h.views)}`
+        : (h.participants ? `参与 ${P._hotspotFormatNumberText(Number(h.participants)||h.participants)}` : (h.heat ? `热度 ${P._hotspotFormatNumberText(Number(h.heat)||h.heat)}` : ''));
+      const rankCls = rankNo <= 3 ? 'bg-orange-50 text-orange-600 border-orange-100' : 'bg-gray-50 text-gray-500 border-gray-100';
+      html += `<div class="grid grid-cols-[64px_1fr_140px_180px] gap-3 px-4 py-3 border-b border-gray-100 last:border-b-0 hover:bg-gray-50/70 transition">
+        <div class="flex items-start">
+          <span class="inline-flex items-center justify-center w-8 h-8 rounded-xl border text-xs font-semibold ${rankCls}">${rankNo}</span>
+        </div>
+        <div class="min-w-0">
+          <div class="flex flex-wrap items-center gap-2 mb-1">
             <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${H.esc(h.platform || '-')}</span>
-            ${h.rank ? `<span class="text-xs text-gray-400">#${H.esc(h.rank)}</span>` : ''}
-            ${h.participants ? `<span class="text-xs text-gray-400">参与 ${P._hotspotFormatNumberText(Number(h.participants)||h.participants)}</span>` : ''}
-            ${h.views ? `<span class="text-xs text-gray-400">浏览 ${P._hotspotFormatNumberText(Number(h.views)||h.views)}</span>` : (h.heat ? `<span class="text-xs text-gray-400">热度 ${P._hotspotFormatNumberText(Number(h.heat)||h.heat)}</span>` : '')}
-            <span class="text-xs px-2 py-0.5 rounded-full border ${P._hotspotFitBadgeClass(h.fitScore, h.fitLevel)}">${H.esc(P._hotspotFitLabel(h.fitScore, h.fitLevel))}</span>
+            <span class="text-xs text-gray-400">${hotRank}</span>
+            ${h.category ? `<span class="text-xs text-gray-400">${H.esc(h.category)}</span>` : ''}
             ${h._expired ? `<span class="diag-badge diag-warn">已过期 · ${h._ageDays}天</span>` : `<span class="text-xs text-gray-400">${P._hotspotStatusLabel(h.status)}</span>`}
           </div>
-          <div class="text-sm font-semibold text-gray-900 mb-1 line-clamp-2">${H.esc(h.keyword || h.title)}</div>
-          ${h.title && h.title !== h.keyword ? `<div class="text-xs text-gray-500 mb-1 line-clamp-2">${H.esc(h.title)}</div>` : ''}
-          ${h.heatText ? `<div class="text-xs text-gray-400 mb-1">${H.esc(h.heatText)}</div>` : ''}
-          <div class="text-xs text-gray-600 leading-5 line-clamp-2">${H.esc(h.angle || '')}</div>
-          <div class="mt-2 rounded-lg ${h._expired?'bg-amber-50 border-amber-100 text-amber-700':'bg-blue-50/70 border-blue-100 text-blue-700'} border px-2.5 py-2 text-[11px] leading-5">
-            <span class="font-semibold">适配理由：</span>${H.esc(h.fitReason || P._hotspotFitReason(h))}
-          </div>
-          <div class="flex flex-wrap items-center gap-1 mt-2">
-            ${h.category ? `<span class="cos-tag text-xs">${H.esc(h.category)}</span>` : ''}
-            <span class="cos-tag text-xs">热点</span>
-            <span class="text-xs text-gray-400 ml-auto">${H.fmtDateTime(h.fetchedAt || h.createdAt)}</span>
-          </div>
+          <div class="text-sm font-semibold text-gray-900 truncate">${H.esc(h.keyword || h.title)}</div>
+          <div class="text-xs text-gray-500 mt-1 line-clamp-1">${H.esc(reason || h.angle || '')}</div>
+          <div class="text-[11px] text-gray-400 mt-1">${H.esc(heat)}${heat ? ' · ' : ''}${H.fmtDateTime(h.fetchedAt || h.createdAt)}</div>
         </div>
-        <div class="flex flex-wrap items-center gap-1.5 pt-3 mt-3 border-t border-gray-100">
-          <button class="cos-btn cos-btn-primary cos-btn-xs" data-hot-to-insp="${h.id}">存为灵感</button>
+        <div class="flex items-start">
+          <span class="text-xs px-2 py-0.5 rounded-full border ${P._hotspotFitBadgeClass(h.fitScore, h.fitLevel)}">${H.esc(P._hotspotFitLabel(h.fitScore, h.fitLevel))}</span>
+        </div>
+        <div class="flex items-start justify-end gap-1 relative">
+          <button class="cos-btn cos-btn-primary cos-btn-xs" data-hot-to-insp="${h.id}">存灵感</button>
           <button class="cos-btn cos-btn-secondary cos-btn-xs" data-hot-to-topic="${h.id}">生成选题</button>
-          ${h.sourceUrl ? `<a class="cos-btn cos-btn-ghost cos-btn-xs" href="${H.esc(h.sourceUrl)}" target="_blank">打开来源</a>` : ''}
-          <button class="cos-btn cos-btn-ghost cos-btn-xs" data-hot-edit="${h.id}">编辑</button>
-          <button class="cos-btn cos-btn-ghost cos-btn-xs" data-hot-ignore="${h.id}">忽略</button>
-          <button class="cos-btn cos-btn-ghost cos-btn-xs text-red-500" data-hot-delete="${h.id}">删除</button>
+          <div class="relative">
+            <button class="cos-btn cos-btn-ghost cos-btn-xs" data-hot-more="${h.id}">更多</button>
+            <div class="hot-more-menu hidden absolute right-0 top-full mt-1 w-28 bg-white border border-gray-100 rounded-lg shadow-lg z-20 py-1" data-hot-more-menu="${h.id}">
+              <button class="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50" data-hot-edit="${h.id}">编辑</button>
+              ${h.sourceUrl ? `<a class="block px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50" href="${H.esc(h.sourceUrl)}" target="_blank">打开来源</a>` : ''}
+              <button class="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-50" data-hot-ignore="${h.id}">忽略</button>
+              <button class="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-red-50" data-hot-delete="${h.id}">删除</button>
+            </div>
+          </div>
         </div>
       </div>`;
     });
@@ -2546,6 +2693,17 @@ P.renderHotspots = () => {
     P._hotspotSearch = '';
     P.renderHotspots();
   });
+  document.querySelectorAll('[data-hot-more]').forEach(btn => btn.onclick = (e) => {
+    e.stopPropagation();
+    const id = btn.dataset.hotMore;
+    document.querySelectorAll('[data-hot-more-menu]').forEach(m => {
+      if(m.dataset.hotMoreMenu !== id) m.classList.add('hidden');
+    });
+    document.querySelector(`[data-hot-more-menu="${id}"]`)?.classList.toggle('hidden');
+  });
+  document.addEventListener('click', () => {
+    document.querySelectorAll('[data-hot-more-menu]').forEach(m => m.classList.add('hidden'));
+  }, { once:true });
   document.querySelectorAll('[data-hot-to-insp]').forEach(btn => btn.onclick = () => P._hotspotToInspiration(btn.dataset.hotToInsp));
   document.querySelectorAll('[data-hot-to-topic]').forEach(btn => btn.onclick = () => P._hotspotToTopic(btn.dataset.hotToTopic));
   document.querySelectorAll('[data-hot-edit]').forEach(btn => btn.onclick = () => P._openHotspotEditModal(btn.dataset.hotEdit));
@@ -2847,7 +3005,7 @@ P._openHotspotManualModal = async () => {
       </div>
       <div>${UI.renderField('来源链接（可选）','sourceUrl','url','')}</div>
       <div>${UI.renderField('旅行关联角度（可选）','angle','textarea','',null,'不填则自动生成')}</div>
-      <div>${UI.renderField('适配理由/备注（可选）','fitReason','textarea','',null,'不填则系统根据热点自动生成；填写后卡片优先展示你写的内容')}</div>
+      <div>${UI.renderField('适配理由/备注（可选）','fitReason','textarea','',null,'不填则系统会根据热点自动生成具体适配理由；填写后卡片优先展示你写的内容')}</div>
       <div class="flex justify-end gap-3 pt-2">
         <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
         <button type="button" class="cos-btn cos-btn-primary" id="hotspot-manual-save">保存热点</button>
@@ -2925,7 +3083,7 @@ P._openHotspotEditModal = async (id) => {
       <div>${UI.renderField('热度文本（可选）','heatText','text',h.heatText||'',null,'例如：23.5万人参与 · 3.7亿次浏览')}</div>
       <div>${UI.renderField('来源链接（可选）','sourceUrl','url',h.sourceUrl||'')}</div>
       <div>${UI.renderField('旅行关联角度（可选）','angle','textarea',h.angle||'',null,'不填则根据热点自动生成')}</div>
-      <div>${UI.renderField('适配理由/备注（可选）','fitReason','textarea',h.fitReason||'',null,'不填则系统根据热点自动生成；填写后卡片优先展示你写的内容')}</div>
+      <div>${UI.renderField('适配理由/备注（可选）','fitReason','textarea',h.fitReason||'',null,'不填则系统会根据热点自动生成具体适配理由；填写后卡片优先展示你写的内容')}</div>
 
       <div>
         <label class="cos-label">状态</label>
