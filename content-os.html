@@ -2070,7 +2070,7 @@ P.renderWorkbench = () => {
         <div class="ops-mini-list">${worthHotspots.length ? worthHotspots.map(h=>`
           <div class="rounded-xl border border-gray-100 p-3">
             <div class="flex items-center gap-2"><div class="text-sm font-semibold text-gray-900 flex-1 truncate">${H.esc(h.keyword||h.title)}</div><span class="diag-badge ${Number(h.fitScore)>=75?'diag-danger':'diag-ok'}">${H.esc(P._hotspotFitLabel(h.fitScore,h.fitLevel))}</span></div>
-            <div class="text-xs text-gray-500 mt-1">${H.esc(P._hotspotFitReason(h))}</div>
+            <div class="text-xs text-gray-500 mt-1">${H.esc(h.fitReason || P._hotspotFitReason(h))}</div>
           </div>`).join('') : '<div class="text-sm text-gray-400 py-6 text-center">暂无值得跟进热点</div>'}</div>
         ${expiredHotspots.length ? `<div class="mt-3 pt-3 border-t border-gray-100 text-xs text-amber-600">还有 ${expiredHotspots.length} 个热点已超过 3 天未处理，已自动降权。<button class="ml-1 underline" data-route-jump="hotspots">去处理</button></div>` : ''}
       </div>
@@ -2174,10 +2174,22 @@ P._hotspotLoad = () => {
 
 P._hotspotSave = async (items) => {
   const safeItems = Array.isArray(items) ? items : [];
-  try { localStorage.setItem(P._HOTSPOT_STORAGE_KEY, JSON.stringify(safeItems)); }
-  catch(e) { UI.toast('热点本地保存失败：' + e.message, 'error'); }
+  let localOK = true;
+  if(S?.db?.config) S.db.config.hotspots = safeItems;
+  try {
+    localStorage.setItem(P._HOTSPOT_STORAGE_KEY, JSON.stringify(safeItems));
+    try { localStorage.setItem('content_os_last_hotspot_local_cache_status', 'ok'); } catch(_) {}
+  } catch(e) {
+    localOK = false;
+    // 热点以当前内存/云端 config 为主；本地缓存失败只记录，不再弹“保存失败”，避免每次保存都干扰操作。
+    console.warn('热点本地缓存失败，已跳过用户提示：', e.message);
+    try {
+      localStorage.setItem('content_os_last_hotspot_local_cache_status', 'error');
+      localStorage.setItem('content_os_last_hotspot_local_cache_error', e.message || '');
+    } catch(_) {}
+  }
   const cloudOK = await P._hotspotSyncToCloud(safeItems);
-  return { localOK: true, cloudOK, total: safeItems.length };
+  return { localOK, cloudOK, total:safeItems.length };
 };
 
 P._hotspotGetConfig = () => {
@@ -2463,6 +2475,7 @@ P.renderHotspots = () => {
           <button class="cos-btn cos-btn-primary cos-btn-xs" data-hot-to-insp="${h.id}">存为灵感</button>
           <button class="cos-btn cos-btn-secondary cos-btn-xs" data-hot-to-topic="${h.id}">生成选题</button>
           ${h.sourceUrl ? `<a class="cos-btn cos-btn-ghost cos-btn-xs" href="${H.esc(h.sourceUrl)}" target="_blank">打开来源</a>` : ''}
+          <button class="cos-btn cos-btn-ghost cos-btn-xs" data-hot-edit="${h.id}">编辑</button>
           <button class="cos-btn cos-btn-ghost cos-btn-xs" data-hot-ignore="${h.id}">忽略</button>
           <button class="cos-btn cos-btn-ghost cos-btn-xs text-red-500" data-hot-delete="${h.id}">删除</button>
         </div>
@@ -2535,6 +2548,7 @@ P.renderHotspots = () => {
   });
   document.querySelectorAll('[data-hot-to-insp]').forEach(btn => btn.onclick = () => P._hotspotToInspiration(btn.dataset.hotToInsp));
   document.querySelectorAll('[data-hot-to-topic]').forEach(btn => btn.onclick = () => P._hotspotToTopic(btn.dataset.hotToTopic));
+  document.querySelectorAll('[data-hot-edit]').forEach(btn => btn.onclick = () => P._openHotspotEditModal(btn.dataset.hotEdit));
   document.querySelectorAll('[data-hot-ignore]').forEach(btn => btn.onclick = async () => await P._hotspotUpdateStatus(btn.dataset.hotIgnore, 'ignored'));
   document.querySelectorAll('[data-hot-delete]').forEach(btn => btn.onclick = async () => {
     const ok = await UI.confirm('删除热点', '确定删除这条热点记录？', {danger:true, confirmText:'删除'});
@@ -2814,7 +2828,7 @@ P._openHotspotPasteModal = async () => {
   const ok = await P._openHotspotImportPreview(items, '确认导入热点');
   if(!ok) return;
   const result = await P._mergeHotspots(items);
-  UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
+  UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条`, 'success');
   P.renderHotspots();
 };
 
@@ -2833,6 +2847,7 @@ P._openHotspotManualModal = async () => {
       </div>
       <div>${UI.renderField('来源链接（可选）','sourceUrl','url','')}</div>
       <div>${UI.renderField('旅行关联角度（可选）','angle','textarea','',null,'不填则自动生成')}</div>
+      <div>${UI.renderField('适配理由/备注（可选）','fitReason','textarea','',null,'不填则系统根据热点自动生成；填写后卡片优先展示你写的内容')}</div>
       <div class="flex justify-end gap-3 pt-2">
         <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
         <button type="button" class="cos-btn cos-btn-primary" id="hotspot-manual-save">保存热点</button>
@@ -2868,12 +2883,115 @@ P._openHotspotManualModal = async () => {
     category: data.category || '出行',
     url: data.sourceUrl || '',
     angle: data.angle || '',
+    fitReason: data.fitReason || '',
     _source: 'manual'
   }, data.platform || '小红书', 0);
   const result = await P._mergeHotspots([item].filter(Boolean));
-  UI.toast(`${result.added ? '热点已保存' : '热点已更新'}：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
+  UI.toast(`${result.added ? '热点已保存' : '热点已更新'}：新增 ${result.added} 条，更新 ${result.updated} 条`, 'success');
   P.renderHotspots();
 };
+
+
+P._openHotspotEditModal = async (id) => {
+  const items = P._hotspotLoad();
+  const idx = items.findIndex(x => x.id === id);
+  if(idx < 0) return;
+  const h = items[idx] || {};
+  const platformOptions = [...new Set(['小红书','抖音','微博','手动', h.platform].filter(Boolean))];
+  const statusOptions = ['candidate','saved_inspiration','saved_topic','ignored'];
+  const statusLabels = {candidate:'待判断', saved_inspiration:'已存灵感', saved_topic:'已生成选题', ignored:'已忽略'};
+
+  const statusSelect = statusOptions.map(s => `<option value="${H.esc(s)}" ${(h.status||'candidate')===s?'selected':''}>${H.esc(statusLabels[s] || s)}</option>`).join('');
+
+  const html = `<div class="p-6">
+    <h2 class="text-lg font-semibold text-gray-900 mb-5">编辑热点</h2>
+    <form id="hotspot-edit-form" class="space-y-4">
+      <div class="grid grid-cols-2 gap-3">
+        <div>${UI.renderField('平台','platform','select',h.platform||'小红书',platformOptions)}</div>
+        <div>${UI.renderField('分类','category','text',h.category||'出行')}</div>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3">
+        <div>${UI.renderField('热点词','keyword','text',h.keyword||h.title||'',null,'例如：毕业旅行胎教攻略')}</div>
+        <div>${UI.renderField('标题（可选）','title','text',h.title||h.keyword||'',null,'不填默认同热点词')}</div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-3">
+        <div>${UI.renderField('排名','rank','text',h.rank||'')}</div>
+        <div>${UI.renderField('参与人数','participants','text',h.participants ? P._hotspotFormatNumberText(h.participants) : '',null,'例如：23.5万')}</div>
+        <div>${UI.renderField('浏览量','views','text',h.views ? P._hotspotFormatNumberText(h.views) : '',null,'例如：3.7亿')}</div>
+      </div>
+
+      <div>${UI.renderField('热度文本（可选）','heatText','text',h.heatText||'',null,'例如：23.5万人参与 · 3.7亿次浏览')}</div>
+      <div>${UI.renderField('来源链接（可选）','sourceUrl','url',h.sourceUrl||'')}</div>
+      <div>${UI.renderField('旅行关联角度（可选）','angle','textarea',h.angle||'',null,'不填则根据热点自动生成')}</div>
+      <div>${UI.renderField('适配理由/备注（可选）','fitReason','textarea',h.fitReason||'',null,'不填则系统根据热点自动生成；填写后卡片优先展示你写的内容')}</div>
+
+      <div>
+        <label class="cos-label">状态</label>
+        <select class="cos-select" name="status">${statusSelect}</select>
+      </div>
+
+      <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-700">
+        说明：适配理由留空时，卡片会继续使用系统自动生成的理由；填写后，卡片会优先展示你写的内容。
+      </div>
+
+      <div class="flex justify-end gap-3 pt-2">
+        <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+        <button type="button" class="cos-btn cos-btn-primary" id="hotspot-edit-save">保存修改</button>
+      </div>
+    </form>
+  </div>`;
+
+  const p = UI.openModal(html, {width:'max-w-3xl'});
+  setTimeout(()=>{
+    const btn = document.getElementById('hotspot-edit-save');
+    if(btn) btn.onclick = () => UI.closeModal(UI.readForm(document.getElementById('hotspot-edit-form')));
+  }, 50);
+
+  const data = await p;
+  if(!data || data === 'cancel') return;
+  const keyword = String(data.keyword || data.title || '').trim();
+  if(!keyword) { UI.toast('请填写热点词', 'error'); return; }
+
+  const title = String(data.title || keyword).trim();
+  const category = String(data.category || '出行').trim();
+  const fit = P._hotspotFit(keyword, title, category);
+  const participants = P._hotspotExtractNumber(data.participants || '');
+  const views = P._hotspotExtractNumber(data.views || '');
+  const heatText = String(data.heatText || '').trim() || [
+    participants ? P._hotspotFormatNumberText(participants) + '人参与' : '',
+    views ? P._hotspotFormatNumberText(views) + '次浏览' : ''
+  ].filter(Boolean).join(' · ');
+
+  items[idx] = {
+    ...h,
+    platform: data.platform || h.platform || '小红书',
+    keyword,
+    title,
+    rank: data.rank || h.rank || '',
+    participants,
+    views,
+    heat: P._hotspotExtractNumber(data.heat || views || participants || h.heat || ''),
+    heatText,
+    category,
+    sourceUrl: String(data.sourceUrl || '').trim(),
+    fitScore: fit.score,
+    fitLevel: fit.level,
+    // 用户没写适配理由，就保持空值；展示时会走 P._hotspotFitReason(h) 自动生成。
+    fitReason: String(data.fitReason || '').trim(),
+    angle: String(data.angle || '').trim() || fit.angle,
+    status: data.status || h.status || 'candidate',
+    source: h.source || 'manual',
+    raw: { ...(h.raw || {}), manualEdited: true },
+    updatedAt: H.nowISO()
+  };
+
+  const result = await P._hotspotSave(items);
+  UI.toast('热点已修改', 'success');
+  P.renderHotspots();
+};
+
 
 P._setHotspotButtonLoading = (btn, busy, text) => {
   if(!btn) return;
@@ -2909,7 +3027,7 @@ P._fetchHotspots = async (platform, btn) => {
     if(!normalized.length) throw new Error('接口返回中没有识别到热点列表');
     const result = await P._mergeHotspots(normalized);
     P._closeXhsLoadingModal();
-    UI.toast(`${platform}热点抓取完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
+    UI.toast(`${platform}热点抓取完成：新增 ${result.added} 条，更新 ${result.updated} 条`, 'success');
     P.renderHotspots();
   } catch(e) {
     P._closeXhsLoadingModal();
@@ -3016,7 +3134,7 @@ P._importHotspotFile = () => {
       const ok = await P._openHotspotImportPreview(items, '确认导入热点文件');
       if(!ok) return;
       const result = await P._mergeHotspots(items);
-      UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条${result.cloudOK ? '，已同步云端' : '，本地可用，云端稍后重试'}`, result.cloudOK ? 'success' : 'warn');
+      UI.toast(`热点导入完成：新增 ${result.added} 条，更新 ${result.updated} 条`, 'success');
       P.renderHotspots();
     } catch(err) {
       P._closeXhsLoadingModal();
