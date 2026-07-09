@@ -70,7 +70,12 @@
   .cos-btn-xs { padding:3px 8px; font-size:11px; border-radius:5px; }
 
   /* === Tag === */
-  .cos-tag { display:inline-flex; align-items:center; padding:2px 8px; border-radius:5px; font-size:12px; font-weight:500; background:#f1f5f9; color:#475569; }
+  .cos-tag { display:inline-flex; align-items:center; padding:2px 8px; border-radius:5px; font-size:12px; font-weight:500; background:#f1f5f9; color:#475569; white-space:nowrap; word-break:keep-all; flex-shrink:0; }
+  .content-platform-cell { min-width:116px; white-space:nowrap; word-break:keep-all; }
+  .content-platform-cell span,
+  .content-platform-cell .cos-tag,
+  .content-platform-cell .diag-badge { white-space:nowrap; word-break:keep-all; flex-shrink:0; }
+  .content-platform-cell > div { min-width:max-content; }
 
   /* === Table === */
   .cos-table { width:100%; border-collapse:collapse; font-size:13px; table-layout:auto; }
@@ -1778,14 +1783,14 @@ UI.readForm = (formEl) => {
 // --- 状态 Badge HTML ---
 UI.statusBadge = (status) => {
   const label = C.TOPIC_STATUS_LABEL[status]||status;
-  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium badge-${status}">${label}</span>`;
+  return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium badge-${status}">${label}</span>`;
 };
 
 // --- 评分 Badge ---
 UI.ratingBadge = (rating) => {
   if(!rating) return '<span class="text-gray-400 text-xs">-</span>';
   const colors = {S:'bg-yellow-50 text-yellow-700 border-yellow-200',A:'bg-green-50 text-green-700 border-green-200',B:'bg-blue-50 text-blue-700 border-blue-200',C:'bg-gray-50 text-gray-600 border-gray-200'};
-  return `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border ${colors[rating]||colors.C}">${rating}</span>`;
+  return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium border ${colors[rating]||colors.C}">${rating}</span>`;
 };
 
 // --- 空状态 ---
@@ -3352,7 +3357,7 @@ P._openLinkParseModal = async (themes, formats, hooks, goals) => {
           <div class="flex gap-3">
             <div id="link-preview-cover" class="w-20 h-20 bg-gray-200 rounded-lg overflow-hidden shrink-0"></div>
             <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-1"><span id="link-preview-platform" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600"></span></div>
+              <div class="flex items-center gap-2 mb-1"><span id="link-preview-platform" class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium bg-blue-50 text-blue-600"></span></div>
               <div id="link-preview-title" class="text-sm font-semibold text-gray-900 mb-1"></div>
               <div id="link-preview-desc" class="text-xs text-gray-500 line-clamp-3"></div>
               <div id="link-preview-stats" class="flex gap-3 mt-1.5 text-xs text-gray-400"></div>
@@ -3407,7 +3412,7 @@ P._openLinkParseModal = async (themes, formats, hooks, goals) => {
     const descEl = document.getElementById('link-preview-desc');
     if(descEl) descEl.textContent = data.description||'';
     const pfEl = document.getElementById('link-preview-platform');
-    if(pfEl) { pfEl.textContent = '📱 '+pname; pfEl.className = 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium '+(data.platform==='xiaohongshu'?'bg-red-50 text-red-600':'bg-gray-900 text-white'); }
+    if(pfEl) { pfEl.textContent = '📱 '+pname; pfEl.className = 'inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium '+(data.platform==='xiaohongshu'?'bg-red-50 text-red-600':'bg-gray-900 text-white'); }
 
     // 交互数据展示
     const m = data.metrics||{};
@@ -3704,7 +3709,7 @@ P._openPublishModal = async (topicId) => {
   const html = `
     <div class="p-6">
       <h2 class="text-base font-semibold text-gray-900 mb-1">发布内容</h2>
-      <p class="text-sm text-gray-500 mb-5">选题：${H.esc(t.title)}${isFromLink?'<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-600">🔗 链接解析</span>':''}</p>
+      <p class="text-sm text-gray-500 mb-5">选题：${H.esc(t.title)}${isFromLink?'<span class="ml-2 inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs bg-blue-50 text-blue-600">🔗 链接解析</span>':''}</p>
       <form id="publish-form" class="space-y-4">
         <div><label class="cos-label">发布平台 *</label><select class="cos-select" name="platform">${isFromLink?'':'<option value="">选择平台</option>'}${platformOpts}</select></div>
         <div class="grid grid-cols-2 gap-4">
@@ -4428,6 +4433,9 @@ P.renderContents = (containerId) => {
     filtered = P._applyTableSort(filtered);
   }
 
+  // ====== 缓存当前筛选结果：用于批量同步到「渠道分发」 ======
+  P._contentCurrentFiltered = [...filtered];
+
   // ====== 统计（全量，不受分页影响） ======
   const s_ = (key) => filtered.reduce((s,c)=>s+(c.metrics?.[key]||0),0);
   const totalCount = filtered.length;
@@ -4480,7 +4488,7 @@ P.renderContents = (containerId) => {
 
   if(activeTags.length) {
     html += `<div class="flex flex-wrap items-center gap-1.5 text-xs"><span class="text-gray-400">已筛选：</span>`;
-    activeTags.forEach(t=>html+=`<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200 cursor-pointer hover:bg-blue-100" data-remove-tag="${H.esc(JSON.stringify(t).replace(/"/g,'&quot;'))}">${t.group?t.group+': ':''}${t.label} ×</span>`);
+    activeTags.forEach(t=>html+=`<span class="inline-flex items-center gap-1 px-2 py-0.5 whitespace-nowrap rounded-full text-xs bg-blue-50 text-blue-700 border border-blue-200 cursor-pointer hover:bg-blue-100" data-remove-tag="${H.esc(JSON.stringify(t).replace(/"/g,'&quot;'))}">${t.group?t.group+': ':''}${t.label} ×</span>`);
     html += `</div>`;
   }
 
@@ -4512,7 +4520,7 @@ P.renderContents = (containerId) => {
   } else {
     html += `<div class="overflow-x-auto"><table class="cos-table">
       <thead><tr>
-        <th>封面</th><th style="min-width:220px">标题</th><th>平台/账号</th><th>发布时间</th>${P._renderSortTh('观看量','views')}${P._renderSortTh('曝光','exposure')}${P._renderSortTh('点赞','likes')}${P._renderSortTh('评论','comments')}${P._renderSortTh('收藏','favorites')}${P._renderSortTh('分享','shares')}${P._renderSortTh('投流金额','adCost')}<th>操作</th>
+        <th>封面</th><th style="min-width:220px">标题</th><th style="min-width:116px">平台/账号</th><th>发布时间</th>${P._renderSortTh('观看量','views')}${P._renderSortTh('曝光','exposure')}${P._renderSortTh('点赞','likes')}${P._renderSortTh('评论','comments')}${P._renderSortTh('收藏','favorites')}${P._renderSortTh('分享','shares')}${P._renderSortTh('投流金额','adCost')}<th>操作</th>
       </tr></thead><tbody>
       ${pageItems.map(c=>{
         return `<tr>
@@ -4521,7 +4529,7 @@ P.renderContents = (containerId) => {
           <div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900" data-view-content="${c.id}">${H.esc(H.truncate(c.title,20))}</span></div>
           <div class="mt-1">${P._contentDistributionBadge(c.id)}</div>
         </td>
-        <td>
+        <td class="content-platform-cell">
           <div class="flex flex-col items-start gap-1">
             <span class="cos-tag">${H.esc(c.platform)}</span>
             ${P._accountBadge(c)}
@@ -5341,11 +5349,13 @@ P.renderContentsPage = () => {
   P.renderContents('page-body-inner');
   // 内容库顶部操作按钮
   const actionsEl = document.getElementById('page-actions');
-  if(actionsEl) actionsEl.innerHTML = '<button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-import-xhs">📥 导入小红书数据</button><button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-xhs-import-logs">🧾 导入记录</button>';
+  if(actionsEl) actionsEl.innerHTML = '<button class="cos-btn cos-btn-primary cos-btn-sm" id="btn-batch-sync-channel">📣 同步到渠道分发</button><button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-import-xhs">📥 导入小红书数据</button><button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-xhs-import-logs">🧾 导入记录</button>';
   // 绑定导入按钮
   setTimeout(() => {
+    const syncBtn = document.getElementById('btn-batch-sync-channel');
     const btn = document.getElementById('btn-import-xhs');
     const logBtn = document.getElementById('btn-xhs-import-logs');
+    if(syncBtn) syncBtn.onclick = () => P._openBatchSyncChannelModal();
     if(btn) btn.onclick = () => P._importXiaohongshuData(btn);
     if(logBtn) logBtn.onclick = () => P._openXhsImportLogs();
   }, 50);
@@ -5355,6 +5365,165 @@ P.renderCalendarPage = () => {
   document.getElementById('page-body').innerHTML = '<div id="page-body-inner"></div>';
   P.renderCalendar('page-body-inner');
 };
+
+// ==================== 内容库 → 渠道分发：批量同步 ====================
+
+P._contentMetricForChannel = (c, key) => {
+  const m = c?.metrics || {};
+  const n = parseInt(m[key] || 0, 10);
+  return Number.isFinite(n) ? n : 0;
+};
+
+P._contentChannelRecordDraft = (c, channel) => {
+  const m = c.metrics || {};
+  const account = P._contentAccountName ? P._contentAccountName(c) : (m.publishAccount || '');
+  return {
+    channel: channel || c.platform || '其他',
+    subChannel: '',
+    publishAccount: account || '',
+    contentId: c.id,
+    title: c.title || '',
+    bodyText: c.bodyText || '',
+    publishDate: H.parseDate(c.publishDate) || c.publishDate || H.today(),
+    publishTime: P._normalizePublishTime ? P._normalizePublishTime(c.publishTime || '') : (c.publishTime || ''),
+    postLink: c.contentLink || '',
+    views: P._contentMetricForChannel(c, 'views'),
+    likes: P._contentMetricForChannel(c, 'likes'),
+    comments: P._contentMetricForChannel(c, 'comments'),
+    leads: 0,
+    groupAdds: 0,
+    downloads: P._contentMetricForChannel(c, 'downloads'),
+    status: '正常',
+    rating: '待观察',
+    notes: '由内容库批量同步',
+  };
+};
+
+P._findExistingChannelRecord = (records, draft) => {
+  return records.find(r =>
+    (draft.contentId && r.contentId === draft.contentId && (r.channel || '') === (draft.channel || '')) ||
+    (draft.postLink && r.postLink && r.postLink === draft.postLink && (r.channel || '') === (draft.channel || ''))
+  );
+};
+
+P._batchSyncContentsToChannels = async (contents, mode='auto', selectedChannel='') => {
+  const now = H.nowISO();
+  const records = P._channelLoad ? P._channelLoad() : [];
+  const next = [...records];
+  let created = 0, updated = 0, skipped = 0;
+
+  contents.forEach(c => {
+    const channel = mode === 'fixed' ? selectedChannel : (c.platform || selectedChannel || '其他');
+    if(!channel) { skipped += 1; return; }
+    const draft = P._contentChannelRecordDraft(c, channel);
+    const old = P._findExistingChannelRecord(next, draft);
+
+    if(old) {
+      // 已有手动/历史分发记录：只补齐内容库基础信息和平台数据，不覆盖引流、进群、评级、备注等人工判断。
+      old.title = old.title || draft.title;
+      old.bodyText = old.bodyText || draft.bodyText;
+      old.publishDate = old.publishDate || draft.publishDate;
+      old.publishTime = old.publishTime || draft.publishTime;
+      old.postLink = old.postLink || draft.postLink;
+      old.publishAccount = old.publishAccount || draft.publishAccount;
+      old.views = draft.views || old.views || 0;
+      old.likes = draft.likes || old.likes || 0;
+      old.comments = draft.comments || old.comments || 0;
+      old.downloads = draft.downloads || old.downloads || 0;
+      old.status = old.status || '正常';
+      old.rating = old.rating || '待观察';
+      old.updatedAt = now;
+      updated += 1;
+    } else {
+      next.push({
+        id: H.uid('ch_'),
+        ...draft,
+        createdAt: now,
+        updatedAt: now
+      });
+      created += 1;
+    }
+  });
+
+  await P._channelSave(next);
+  return { created, updated, skipped, total: contents.length };
+};
+
+P._openBatchSyncChannelModal = async () => {
+  const all = Array.isArray(P._contentCurrentFiltered) ? P._contentCurrentFiltered : S.contents.all();
+  if(!all.length) {
+    UI.toast('当前筛选下没有可同步的内容', 'error');
+    return;
+  }
+
+  const F = P._contentFilters || {};
+  const singlePlatform = Array.isArray(F.platform) && F.platform.length === 1 ? F.platform[0] : '';
+  const platforms = [...new Set(all.map(c => c.platform || '其他'))].filter(Boolean);
+  const channels = P._channelOptions ? P._channelOptions() : [...C.DEFAULT_CHANNELS];
+  const autoDefault = singlePlatform ? singlePlatform : 'auto';
+
+  const platformSummary = platforms.map(p => {
+    const count = all.filter(c => (c.platform || '其他') === p).length;
+    return `<span class="inline-flex items-center px-2 py-1 rounded-lg bg-gray-50 text-xs text-gray-600">${H.esc(p)} <b class="ml-1 text-gray-900">${count}</b></span>`;
+  }).join('');
+
+  const channelOpts = ['<option value="auto">按内容平台自动匹配</option>']
+    .concat(channels.map(ch => `<option value="${H.esc(ch)}" ${autoDefault===ch?'selected':''}>${H.esc(ch)}</option>`))
+    .join('');
+
+  const html = `<div class="p-6">
+    <h2 class="text-base font-semibold text-gray-900 mb-2">同步到渠道分发</h2>
+    <p class="text-sm text-gray-500 mb-5">会把当前内容库筛选结果批量创建到「渠道分发」。已存在的记录会更新基础数据，不覆盖你手动填的引流/进群/备注。</p>
+
+    <div class="rounded-xl bg-gray-50 p-4 mb-4">
+      <div class="text-xs text-gray-400 mb-2">当前将同步</div>
+      <div class="text-2xl font-semibold text-gray-900">${all.length} 条内容</div>
+      <div class="flex flex-wrap gap-2 mt-3">${platformSummary}</div>
+    </div>
+
+    <form id="batch-sync-channel-form" class="space-y-4">
+      <div>
+        <label class="cos-label">同步到哪个分发渠道</label>
+        <select class="cos-select" name="channelMode">${channelOpts}</select>
+        <div class="text-xs text-gray-400 mt-1">如果你已经在内容库筛选了「小红书/抖音」，建议直接选择对应平台；也可以选择“按内容平台自动匹配”。</div>
+      </div>
+
+      <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-700">
+        同步字段：标题、正文、发布时间、链接、发布账号、浏览量、点赞、评论、下载数。引流用户/进群人数默认不覆盖，后续在渠道分发里手动补。
+      </div>
+
+      <div class="flex justify-end gap-3 pt-2">
+        <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+        <button type="button" class="cos-btn cos-btn-primary" id="batch-sync-channel-save">开始同步</button>
+      </div>
+    </form>
+  </div>`;
+
+  const modalPromise = UI.openModal(html, {width:'max-w-2xl'});
+  setTimeout(() => {
+    const btn = document.getElementById('batch-sync-channel-save');
+    if(btn) btn.onclick = () => {
+      const form = document.getElementById('batch-sync-channel-form');
+      if(!form) return;
+      const data = UI.readForm(form);
+      UI.closeModal(data);
+    };
+  }, 50);
+
+  const result = await modalPromise;
+  if(!result || result === 'cancel') return;
+
+  const value = result.channelMode || 'auto';
+  const mode = value === 'auto' ? 'auto' : 'fixed';
+  const selectedChannel = value === 'auto' ? '' : value;
+  const res = await P._batchSyncContentsToChannels(all, mode, selectedChannel);
+
+  UI.toast(`同步完成：新增 ${res.created} 条，更新 ${res.updated} 条${res.skipped ? '，跳过 '+res.skipped+' 条' : ''}`);
+  window.location.hash = '#channels';
+  if(window.R && typeof R.go === 'function') R.go('channels');
+};
+
+
 
 // ==================== 系统设置：Tab 页 ====================
 
@@ -6958,12 +7127,12 @@ P.renderKnowledge = () => {
     html += '<div class="space-y-2">';
     pageItems.forEach(k=>{
       const catLabel = C.KNOWLEDGE_CATEGORY_LABEL[k.category]||k.category||'未分类';
-      const tagBadges = (k.tags||[]).slice(0,4).map(t=>'<span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-600">'+H.esc(t)+'</span>').join('');
+      const tagBadges = (k.tags||[]).slice(0,4).map(t=>'<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded text-xs bg-gray-100 text-gray-600">'+H.esc(t)+'</span>').join('');
       html += '<div class="cos-card p-4 hover:shadow-md transition-shadow">';
       html += '<div class="flex items-start justify-between mb-2">';
       html += '<div class="flex-1 min-w-0 cursor-pointer" data-view-k="'+k.id+'"><span class="text-sm font-medium text-gray-900 line-clamp-1">'+H.esc(k.title||'无标题')+'</span></div>';
       html += '<div class="flex items-center gap-1 shrink-0 ml-2">';
-      html += '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600">'+catLabel+'</span>';
+      html += '<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium bg-blue-50 text-blue-600">'+catLabel+'</span>';
       html += '<button class="cos-btn cos-btn-ghost cos-btn-xs" data-edit-k="'+k.id+'" title="编辑">✏️</button>';
       html += '<button class="cos-btn cos-btn-ghost cos-btn-xs text-red-400" data-delete-k="'+k.id+'" title="删除">🗑️</button>';
       html += '</div>';
@@ -7149,14 +7318,14 @@ P._openKnowledgeDrawer = (kId) => {
   const k = S.knowledge.get(kId);
   if(!k) return;
   const catLabel = C.KNOWLEDGE_CATEGORY_LABEL[k.category]||k.category||'未分类';
-  const tagBadges = (k.tags||[]).map(t=>'<span class="inline-flex items-center px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-600">'+H.esc(t)+'</span>').join(' ');
+  const tagBadges = (k.tags||[]).map(t=>'<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded text-xs bg-gray-100 text-gray-600">'+H.esc(t)+'</span>').join(' ');
   const html = `<div class="flex items-center justify-between px-6 py-3 border-b border-gray-100 shrink-0">
     <div class="text-[17px] font-semibold text-gray-900 truncate pr-4">知识详情</div>
     <button class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors shrink-0" data-drawer-close title="关闭" style="font-size:18px;line-height:1">&times;</button>
   </div>
   <div class="p-6 space-y-4">
     <div><span class="text-xs text-gray-400">标题</span><p class="text-sm font-semibold text-gray-900 mt-1">${H.esc(k.title)}</p></div>
-    <div><span class="text-xs text-gray-400">分类</span><p class="text-sm text-gray-700 mt-1"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-600">${catLabel}</span></p></div>
+    <div><span class="text-xs text-gray-400">分类</span><p class="text-sm text-gray-700 mt-1"><span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium bg-blue-50 text-blue-600">${catLabel}</span></p></div>
     <div><span class="text-xs text-gray-400">标签</span><p class="mt-1 flex flex-wrap gap-1">${tagBadges||'<span class="text-xs text-gray-400">-</span>'}</p></div>
     <div><span class="text-xs text-gray-400">内容</span><div class="mt-2 text-sm text-gray-800 leading-relaxed whitespace-pre-wrap">${H.esc(k.content||'无内容')}</div></div>
     <div><span class="text-xs text-gray-400">来源</span><p class="text-sm text-gray-700 mt-1">${({manual:'手动创建',content:'从内容库提炼',competitor:'从竞品观察提炼'})[k.sourceType||'manual']||'手动创建'}</p></div>
@@ -7943,19 +8112,36 @@ P._channelSyncToCloud = async (items) => {
 P._channelLoad = () => {
   const localItems = P._channelReadLocal();
   const cloudItems = S?.db?.config?.channelRecords;
-  if(Array.isArray(cloudItems) && cloudItems.length) {
-    try { localStorage.setItem(P._CHANNEL_STORAGE_KEY, JSON.stringify(cloudItems)); } catch(_) {}
-    return cloudItems;
+  const cloudArr = Array.isArray(cloudItems) ? cloudItems : [];
+
+  // 正常优先云端；但如果本地有新增记录而云端/内存尚未同步，按 id 合并，避免“保存了但列表看不到”。
+  if(cloudArr.length || localItems.length) {
+    const map = new Map();
+    const put = (r) => {
+      if(!r) return;
+      const id = r.id || (String(r.channel||'') + '_' + String(r.title||'') + '_' + String(r.publishDate||'') + '_' + String(r.publishTime||''));
+      if(!id) return;
+      const old = map.get(id);
+      if(!old) { map.set(id, r); return; }
+      const ot = String(old.updatedAt || old.createdAt || '');
+      const nt = String(r.updatedAt || r.createdAt || '');
+      if(nt >= ot) map.set(id, {...old, ...r});
+    };
+    cloudArr.forEach(put);
+    localItems.forEach(put);
+    const merged = Array.from(map.values());
+    try { localStorage.setItem(P._CHANNEL_STORAGE_KEY, JSON.stringify(merged)); } catch(_) {}
+    if(S?.db?.config) S.db.config.channelRecords = merged;
+    if(merged.length !== cloudArr.length) P._channelSyncToCloud(merged);
+    return merged;
   }
-  if(localItems.length && S?.db?.config && (!Array.isArray(cloudItems) || cloudItems.length === 0)) {
-    P._channelSyncToCloud(localItems);
-  }
-  return Array.isArray(cloudItems) ? cloudItems : localItems;
+  return [];
 };
 
 P._channelSave = async (items) => {
   const safeItems = Array.isArray(items) ? items : [];
   let localOK = true;
+  if(S?.db?.config) S.db.config.channelRecords = safeItems;
   try {
     localStorage.setItem(P._CHANNEL_STORAGE_KEY, JSON.stringify(safeItems));
   } catch(e) {
@@ -8028,11 +8214,11 @@ P._channelDistributionSummary = (contentId) => {
 
 P._contentDistributionBadge = (contentId) => {
   const s = P._channelDistributionSummary(contentId);
-  if(!s.count) return '<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] bg-gray-50 text-gray-400 border border-gray-100">未分发</span>';
+  if(!s.count) return '<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-md text-[11px] bg-gray-50 text-gray-400 border border-gray-100">未分发</span>';
   const cls = s.leads > 0 || s.groupAdds > 0 || s.downloads > 0
     ? 'bg-emerald-50 text-emerald-600 border-emerald-100'
     : 'bg-blue-50 text-blue-600 border-blue-100';
-  return `<span class="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] ${cls}">已分发 ${s.count} 个渠道</span>`;
+  return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-md text-[11px] ${cls}">已分发 ${s.count} 个渠道</span>`;
 };
 
 P._renderContentChannelSummary = (contentId) => {
@@ -8181,27 +8367,66 @@ P._metricMiniCard = (label, row, metricLabel, value) => {
   </div>`;
 };
 
+P._isCommunityDistributionChannel = (channel) => {
+  const s = String(channel || '').trim();
+  if(!s) return false;
+
+  // 小红书 / 抖音 / 视频号 / B站 / 公众号这类是单一发布平台，不做“频道/社群”排行。
+  if(/小红书|抖音|视频号|B站|公众号/i.test(s)) return false;
+
+  // QQ频道、QQ群、微信群、社群类才适合继续拆到具体频道/社群。
+  return /QQ|微信群|QQ群|微信|社群|群|频道|俱乐部|交流/i.test(s);
+};
+
 P._hasSpecificChannelData = (items) => {
-  return (items || []).some(r => {
+  return P._channelSpecificAnalysisItems(items).length > 0;
+};
+
+P._channelSpecificAnalysisItems = (items) => {
+  return (items || []).filter(r => {
     const base = r.channel || '其他';
+    if(!P._isCommunityDistributionChannel(base)) return false;
+    const explicit = String(r.subChannel || '').trim();
     const specific = P._channelSpecificName(r);
-    return !!String(r.subChannel || '').trim() || (specific && specific !== base);
+    return !!explicit || (specific && specific !== base);
   });
+};
+
+P._channelUseSpecificAnalysis = (items) => {
+  const specificItems = P._channelSpecificAnalysisItems(items);
+  if(!specificItems.length) return false;
+
+  // 单独筛选小红书/抖音/视频号/其他时，即使误填了“其他”，也不展示频道排行。
+  if(P._channelFilter && P._channelFilter !== 'all') {
+    return P._isCommunityDistributionChannel(P._channelFilter);
+  }
+  return true;
+};
+
+P._channelProblem = (items) => {
+  const total = P._channelStats(items || []);
+  const leadRate = total.views ? total.leads / total.views : 0;
+
+  if(total.blocked > 0) return { title:'注意屏蔽风险', desc:`有 ${total.blocked} 条被删/屏蔽，话术要更自然。`, cls:'text-red-600' };
+  if(total.views >= 300 && total.leads === 0) return { title:'浏览高，引流弱', desc:'建议加强评论区/私信/进群钩子。', cls:'text-amber-600' };
+  if(total.leads > 0 && total.groupAdds === 0) return { title:'有引流，进群弱', desc:'可以优化私信承接或进群入口。', cls:'text-amber-600' };
+  if(leadRate > 0 && leadRate < 0.01 && total.views >= 300) return { title:'引流率偏低', desc:'内容能吸引浏览，但转化还不够。', cls:'text-amber-600' };
+  if(total.groupAdds > 0 || leadRate >= 0.03) return { title:'表现不错', desc:'可以继续复用这个发布时间/话术。', cls:'text-emerald-600' };
+  return { title:'继续观察', desc:'样本还不多，先继续记录。', cls:'text-gray-700' };
 };
 
 P._renderChannelAnalytics = (items) => {
   items = items || [];
   if(items.length === 0) return '';
 
-  const hasSpecific = P._hasSpecificChannelData(items);
-  const rows = P._channelAggRows(items, 'specific');
+  const useSpecific = P._channelUseSpecificAnalysis(items);
+  const specificItems = P._channelSpecificAnalysisItems(items);
+  const analysisItems = useSpecific ? specificItems : items;
+
+  const rows = P._channelAggRows(analysisItems, useSpecific ? 'specific' : 'time');
   const timeRows = P._channelAggRows(items, 'time');
   const weekdayRows = P._channelAggRows(items, 'weekday');
 
-  const topViews = P._channelBest(hasSpecific ? rows : timeRows, 'views');
-  const topLeads = P._channelBest(hasSpecific ? rows : timeRows, 'leads');
-  const topGroup = P._channelBest(hasSpecific ? rows : timeRows, 'groupAdds');
-  const topRate = P._channelBestRate(hasSpecific ? rows : timeRows, 'leadRate', 'views', 20);
   const bestTime = [...timeRows].sort((a,b)=>b.score-a.score)[0] || null;
   const bestWeekday = [...weekdayRows].sort((a,b)=>b.score-a.score)[0] || null;
 
@@ -8214,23 +8439,28 @@ P._renderChannelAnalytics = (items) => {
     </div>`;
   };
 
-  if(!hasSpecific) {
+  if(!useSpecific) {
     const timeByViews = P._channelBest(timeRows, 'views');
     const timeByComments = P._channelBest(timeRows, 'comments');
     const timeByLeads = P._channelBest(timeRows, 'leads');
-    const timeByGroup = P._channelBest(timeRows, 'groupAdds');
-    const timeByRate = P._channelBestRate(timeRows, 'leadRate', 'views', 20);
+    const problem = P._channelProblem(items);
+
+    const filterName = P._channelFilter && P._channelFilter !== 'all' ? P._channelFilter : '当前筛选';
+    const isSinglePlatform = P._channelFilter && P._channelFilter !== 'all' && !P._isCommunityDistributionChannel(P._channelFilter);
+    const desc = isSinglePlatform
+      ? `${H.esc(filterName)} 是单一发布平台，不展示频道排行，只看发布时间和内容转化。`
+      : `当前没有具体频道/社群备注，不展示频道排行，只看发布时间段表现。`;
 
     const tips = [];
     if(bestTime) tips.push(`优先测试 <b>${H.esc(bestTime.key)}</b>`);
     if(bestWeekday && bestWeekday.key !== '未记录星期') tips.push(`重点观察 <b>${H.esc(bestWeekday.key)}</b>`);
-    if(timeByLeads && timeByLeads.leads > 0) tips.push(`当前引流集中在 <b>${H.esc(timeByLeads.key)}</b>`);
+    if(timeByLeads && timeByLeads.leads > 0) tips.push(`引流集中在 <b>${H.esc(timeByLeads.key)}</b>`);
 
     return `<div class="cos-card p-4">
       <div class="flex items-center justify-between gap-3 mb-3">
         <div>
-          <h3 class="text-sm font-semibold text-gray-800">📈 发布时间段分析</h3>
-          <p class="text-xs text-gray-400 mt-1">当前分发记录没有具体频道备注，所以只按发布时间段判断效果。</p>
+          <h3 class="text-sm font-semibold text-gray-800">📈 平台发布表现</h3>
+          <p class="text-xs text-gray-400 mt-1">${desc}</p>
         </div>
         <div class="flex items-center gap-2">
           <span class="text-xs text-gray-400">样本 ${items.length} 条</span>
@@ -8238,12 +8468,15 @@ P._renderChannelAnalytics = (items) => {
         </div>
       </div>
 
-      <div class="grid grid-cols-2 xl:grid-cols-5 gap-3">
-        ${compactCard('浏览最多时段', timeByViews, '浏览', timeByViews ? H.fmtNum(timeByViews.views) : 0)}
-        ${compactCard('评论最多时段', timeByComments, '评论', timeByComments ? H.fmtNum(timeByComments.comments) : 0)}
-        ${compactCard('引流最多时段', timeByLeads, '引流', timeByLeads ? H.fmtNum(timeByLeads.leads) : 0, 'text-brand-600')}
-        ${compactCard('进群最多时段', timeByGroup, '进群', timeByGroup ? H.fmtNum(timeByGroup.groupAdds) : 0, 'text-emerald-600')}
-        ${compactCard('引流率最高时段', timeByRate, '引流率', timeByRate ? Math.round(timeByRate.leadRate*100)+'%' : '-', 'text-blue-600')}
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        ${compactCard('最佳时间段', bestTime, '引流', bestTime ? H.fmtNum(bestTime.leads) : 0, 'text-brand-600')}
+        ${compactCard('浏览最好时段', timeByViews, '浏览', timeByViews ? H.fmtNum(timeByViews.views) : 0)}
+        ${compactCard('互动最好时段', timeByComments, '评论', timeByComments ? H.fmtNum(timeByComments.comments) : 0)}
+        <div class="rounded-xl bg-gray-50 p-3">
+          <div class="text-xs text-gray-400">当前问题</div>
+          <div class="text-sm font-semibold ${problem.cls} mt-1 truncate">${H.esc(problem.title)}</div>
+          <div class="text-xs text-gray-500 mt-1">${H.esc(problem.desc)}</div>
+        </div>
       </div>
 
       <div class="rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-blue-700 mt-3">
@@ -8251,6 +8484,11 @@ P._renderChannelAnalytics = (items) => {
       </div>
     </div>`;
   }
+
+  const topViews = P._channelBest(rows, 'views');
+  const topLeads = P._channelBest(rows, 'leads');
+  const topGroup = P._channelBest(rows, 'groupAdds');
+  const topRate = P._channelBestRate(rows, 'leadRate', 'views', 20);
 
   const tips = [];
   if(topLeads) tips.push(`引流优先发 <b>${H.esc(topLeads.key)}</b>`);
@@ -8261,8 +8499,8 @@ P._renderChannelAnalytics = (items) => {
   return `<div class="cos-card p-4">
     <div class="flex items-center justify-between gap-3 mb-3">
       <div>
-        <h3 class="text-sm font-semibold text-gray-800">📈 分发效果分析</h3>
-        <p class="text-xs text-gray-400 mt-1">检测到具体频道/社群备注，按具体频道判断效果。</p>
+        <h3 class="text-sm font-semibold text-gray-800">📈 频道/社群分发分析</h3>
+        <p class="text-xs text-gray-400 mt-1">检测到 QQ/社群类具体频道备注，按具体频道判断效果。</p>
       </div>
       <div class="flex items-center gap-2">
         <span class="text-xs text-gray-400">样本 ${items.length} 条</span>
@@ -8288,8 +8526,9 @@ P._openChannelAnalysisModal = async (items) => {
   items = items || [];
   if(!items.length) { UI.toast('暂无可分析的数据'); return; }
 
-  const hasSpecific = P._hasSpecificChannelData(items);
-  const rows = P._channelAggRows(items, 'specific');
+  const useSpecific = P._channelUseSpecificAnalysis(items);
+  const specificItems = P._channelSpecificAnalysisItems(items);
+  const rows = P._channelAggRows(useSpecific ? specificItems : [], 'specific');
   const timeRows = P._channelAggRows(items, 'time');
   const weekdayRows = P._channelAggRows(items, 'weekday');
 
@@ -8325,7 +8564,7 @@ P._openChannelAnalysisModal = async (items) => {
       ${H.esc(r.key)} <b class="text-gray-900">${H.fmtNum(r.leads)}</b> 引流 / <b class="text-emerald-600">${H.fmtNum(r.groupAdds)}</b> 进群
     </span>`).join('');
 
-  const specificBlock = hasSpecific ? `<div class="cos-card p-4">
+  const specificBlock = useSpecific ? `<div class="cos-card p-4">
         <div class="text-sm font-semibold text-gray-700 mb-3">频道/社群效果排行</div>
         <div class="overflow-x-auto max-h-[520px]">
           <table class="w-full text-left">
@@ -8341,12 +8580,12 @@ P._openChannelAnalysisModal = async (items) => {
     <div class="flex items-start justify-between gap-4 mb-5">
       <div>
         <h2 class="text-base font-semibold text-gray-900">分发详细数据</h2>
-        <p class="text-xs text-gray-400 mt-1">${hasSpecific ? '当前有具体频道/社群备注，展示频道排行 + 时间段表现。' : '当前没有具体频道/社群备注，只展示发布时间段表现。'} 样本：${items.length} 条。</p>
+        <p class="text-xs text-gray-400 mt-1">${useSpecific ? '当前为 QQ/社群类渠道，展示频道排行 + 时间段表现。' : '当前为单一平台或没有具体频道备注，不展示频道排行，只展示发布时间段表现。'} 样本：${items.length} 条。</p>
       </div>
       <button class="cos-btn cos-btn-secondary cos-btn-sm" data-modal-action="cancel">关闭</button>
     </div>
 
-    <div class="grid grid-cols-1 ${hasSpecific ? '2xl:grid-cols-2' : ''} gap-5">
+    <div class="grid grid-cols-1 ${useSpecific ? '2xl:grid-cols-2' : ''} gap-5">
       ${specificBlock}
       <div class="space-y-5">
         <div class="cos-card p-4">
@@ -8368,9 +8607,8 @@ P._openChannelAnalysisModal = async (items) => {
     </div>
   </div>`;
 
-  await UI.openModal(modalHtml, {width: hasSpecific ? 'max-w-7xl' : 'max-w-4xl'});
+  await UI.openModal(modalHtml, {width: useSpecific ? 'max-w-7xl' : 'max-w-4xl'});
 };
-
 
 P._channelStats = (items) => {
   const total = items.length;
@@ -8449,11 +8687,16 @@ P.renderChannels = () => {
           <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
         </div>
       </div>
-      ${stats.topChannel ? `<div class="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-700">
-        当前筛选下表现较好：<b>${H.esc(stats.topChannel.channel)}</b> · 引流 ${H.fmtNum(stats.topChannel.leads)} · 进群 ${H.fmtNum(stats.topChannel.groupAdds)} · 下载 ${H.fmtNum(stats.topChannel.downloads)}
-        <span class="ml-2 text-emerald-600">引流率 ${P._channelRatePct(stats.topChannel.leads, stats.topChannel.views)}</span>
-      </div>` : ''}
-      <div class="mt-2 text-xs text-gray-400">分发渠道可在「系统设置 → 配置中心 → 分发渠道」中维护；只有填写“具体频道/社群名称”或备注里有「频道【xxx】」时，才会展示频道排行。</div>
+      <div class="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-700">
+        当前筛选数据：<b>${H.esc(P._channelFilter==='all'?'全部渠道':P._channelFilter)}</b>
+        · 记录 ${H.fmtNum(stats.total)}
+        · 浏览 ${H.fmtNum(stats.views)}
+        · 评论 ${H.fmtNum(stats.comments)}
+        · 引流 ${H.fmtNum(stats.leads)}
+        · 进群 ${H.fmtNum(stats.groupAdds)}
+        · 引流率 ${P._channelRatePct(stats.leads, stats.views)}
+      </div>
+      <div class="mt-2 text-xs text-gray-400">小红书/抖音/视频号等单一平台只展示发布时间段表现；QQ频道/社群类在填写“具体频道/社群名称”或备注「频道【xxx】」后，才展示频道排行。</div>
     </div>`;
 
   html += P._renderChannelAnalytics(items);
@@ -8470,7 +8713,7 @@ P.renderChannels = () => {
           <div class="min-w-0 flex-1">
             <div class="flex flex-wrap items-center gap-2 mb-1.5">
               <span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${H.esc(r.channel || '其他')}</span>
-              ${P._channelSpecificName(r)!==(r.channel||'其他') ? `<span class="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">${H.esc(P._channelSpecificName(r))}</span>` : ''}
+              ${P._isCommunityDistributionChannel(r.channel) && P._channelSpecificName(r)!==(r.channel||'其他') ? `<span class="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600">${H.esc(P._channelSpecificName(r))}</span>` : ''}
               ${P._channelStatusBadge(r.status)}
               ${P._channelRatingBadge(r.rating)}
               ${r.publishAccount ? `<span class="text-xs text-gray-400">${H.esc(r.publishAccount)}</span>` : ''}
@@ -8547,7 +8790,12 @@ P._openChannelModal = async (recordId=null) => {
   const r = isEdit ? items.find(x => x.id === recordId) : {};
   if(isEdit && !r) return;
 
-  const channelOptions = [...new Set([...P._channelOptions(), r?.channel].filter(Boolean))];
+  const filterChannel = (!isEdit && P._channelFilter && P._channelFilter !== 'all') ? P._channelFilter : '';
+  const channelOptions = [...new Set([...P._channelOptions(), r?.channel, filterChannel].filter(Boolean))];
+  const defaultChannel = isEdit ? (r.channel || channelOptions[0] || '其他') : (filterChannel || channelOptions[0] || '其他');
+  const defaultSubChannel = isEdit
+    ? (P._isCommunityDistributionChannel(defaultChannel) ? (r.subChannel || (P._channelSpecificName(r)!==defaultChannel ? P._channelSpecificName(r) : '') || '') : '')
+    : '';
   const contents = S.contents.all().slice().sort((a,b)=>String(b.publishDate||'').localeCompare(String(a.publishDate||'')));
   const contentOpts = ['<option value="">不关联内容库</option>'].concat(contents.slice(0,80).map(c =>
     `<option value="${H.esc(c.id)}" ${(r.contentId||'')===c.id?'selected':''}>${H.esc(H.truncate(c.title, 40))}</option>`
@@ -8557,8 +8805,8 @@ P._openChannelModal = async (recordId=null) => {
     <h2 class="text-base font-semibold text-gray-900 mb-5">${isEdit?'编辑分发记录':'新增分发记录'}</h2>
     <form id="channel-form" class="space-y-4">
       <div class="grid grid-cols-3 gap-4">
-        <div>${UI.renderField('分发渠道','channel','select',r.channel||channelOptions[0]||'其他',channelOptions,'选择渠道')}</div>
-        <div>${UI.renderField('具体频道/社群名称','subChannel','text',r.subChannel||P._channelSpecificName(r)||'',null,'如：自驾交友俱乐部')}</div>
+        <div>${UI.renderField('分发渠道','channel','select',defaultChannel,channelOptions,'选择渠道')}</div>
+        <div>${UI.renderField('具体频道/社群名称','subChannel','text',defaultSubChannel,null,'仅 QQ频道/群/社群需要填')}</div>
         <div>${UI.renderField('发布账号','publishAccount','text',r.publishAccount||'',null,'个人号 / 主体号 / 小号A')}</div>
       </div>
       <div>
@@ -8613,11 +8861,13 @@ P._openChannelModal = async (recordId=null) => {
   const data = result;
 
   const now = H.nowISO();
+  const savedChannel = data.channel || defaultChannel || '其他';
+  const savedSubChannel = P._isCommunityDistributionChannel(savedChannel) ? String(data.subChannel || '').trim() : '';
   const record = {
     ...(r || {}),
     id: r?.id || H.uid('ch_'),
-    channel: data.channel || '其他',
-    subChannel: String(data.subChannel || '').trim(),
+    channel: savedChannel,
+    subChannel: savedSubChannel,
     publishAccount: String(data.publishAccount || '').trim(),
     contentId: data.contentId || '',
     title: String(data.title || '').trim(),
@@ -8641,6 +8891,9 @@ P._openChannelModal = async (recordId=null) => {
   const next = items.filter(x => x.id !== record.id);
   next.push(record);
   await P._channelSave(next);
+  if(P._channelFilter !== 'all' && P._channelFilter !== record.channel) {
+    P._channelFilter = record.channel;
+  }
   UI.toast(isEdit ? '分发记录已更新' : '分发记录已保存');
   P.renderChannels();
 };
