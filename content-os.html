@@ -166,6 +166,18 @@
   .cos-select:focus { border-color:#3b82f6; }
   .cos-textarea { width:100%; padding:8px 12px; border:1px solid #e2e8f0; border-radius:8px; font-size:14px; outline:none; resize:vertical; min-height:80px; }
   .cos-textarea:focus { border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,0.1); }
+  /* 运营台账新增/编辑弹窗：统一单行输入框与下拉框高度 */
+  #ledger-record-form .cos-input,
+  #ledger-record-form .cos-select {
+    height:46px;
+    min-height:46px;
+    box-sizing:border-box;
+    padding-top:0;
+    padding-bottom:0;
+    line-height:44px;
+  }
+  #ledger-record-form select.cos-select { line-height:normal; }
+  #ledger-record-form input[type="date"].cos-input { line-height:normal; }
   .cos-label { display:block; font-size:13px; font-weight:500; color:#475569; margin-bottom:4px; }
   .cos-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; transition:all 0.15s; border:none; outline:none; }
   .cos-btn-primary { background:#2563eb; color:#fff; }
@@ -211,6 +223,7 @@
   .filter-chip { display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:6px;font-size:12px;cursor:pointer;border:1px solid #e2e8f0;background:#fff;color:#64748b;transition:all 0.15s; }
   .filter-chip:hover { border-color:#93c5fd; color:#2563eb; }
   .filter-chip.active { background:#eff6ff; border-color:#3b82f6; color:#2563eb; }
+  .filter-chip:disabled { opacity:.58; cursor:not-allowed; background:#f8fafc; color:#94a3b8; border-color:#e2e8f0; }
 
   /* === Drop Zone === */
   .drop-zone { border:2px dashed #e2e8f0; border-radius:10px; padding:24px; text-align:center; cursor:pointer; transition:all 0.15s; }
@@ -5687,18 +5700,15 @@ P.renderContents = (containerId) => {
   html += `<div class="cos-card p-3 space-y-3">`;
   html += `<div class="flex flex-wrap items-center gap-2">`;
   html += `<div class="relative flex-1 min-w-[160px] max-w-[300px]"><input class="cos-input pl-8" type="text" id="content-search" placeholder="搜索标题、正文、标签、发布人..." value="${H.esc(F.search||'')}"><span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span></div>`;
-  html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-platform"><option value="">全部平台</option>${platforms.map(p=>`<option value="${H.esc(p)}" ${F.platform.includes(p)?'selected':''}>${H.esc(p)}</option>`).join('')}</select>`;
-  html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-account"><option value="">全部账号</option>${accountNames.map(a=>`<option value="${H.esc(a)}" ${(F.account||[]).includes(a)?'selected':''}>${H.esc(a)}</option>`).join('')}</select>`;
-  html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-publisher"><option value="">全部发布人</option>${publisherOptions.map(o=>`<option value="${H.esc(o.key)}" ${(F.publisher||[]).includes(o.key)?'selected':''}>${H.esc(o.label)}</option>`).join('')}</select>`;
+  html += `<select class="cos-select !w-auto min-w-[130px] !pr-10" id="content-filter-platform"><option value="">全部平台</option>${platforms.map(p=>`<option value="${H.esc(p)}" ${F.platform.includes(p)?'selected':''}>${H.esc(p)}</option>`).join('')}</select>`;
+  html += `<select class="cos-select !w-auto min-w-[130px] !pr-10" id="content-filter-account"><option value="">全部账号</option>${accountNames.map(a=>`<option value="${H.esc(a)}" ${(F.account||[]).includes(a)?'selected':''}>${H.esc(a)}</option>`).join('')}</select>`;
+  html += `<select class="cos-select !w-auto min-w-[130px] !pr-10" id="content-filter-publisher"><option value="">全部发布人</option>${publisherOptions.map(o=>`<option value="${H.esc(o.key)}" ${(F.publisher||[]).includes(o.key)?'selected':''}>${H.esc(o.label)}</option>`).join('')}</select>`;
   const timeOpts = [{v:'all',l:'全部时间'},{v:'today',l:'今天'},{v:'7days',l:'最近7天'},{v:'30days',l:'最近30天'},{v:'thisMonth',l:'本月'},{v:'custom',l:'自定义...'}];
-  html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-filter-timeRange">${timeOpts.map(o=>`<option value="${o.v}" ${F.timeRange===o.v?'selected':''}>${o.l}</option>`).join('')}</select>`;
+  html += `<select class="cos-select !w-auto min-w-[130px] !pr-10" id="content-filter-timeRange">${timeOpts.map(o=>`<option value="${o.v}" ${F.timeRange===o.v?'selected':''}>${o.l}</option>`).join('')}</select>`;
   const sortOpts = [{k:'publishDate',l:'发布时间'},{k:'exposure',l:'曝光量'},{k:'likes',l:'点赞量'},{k:'comments',l:'评论量'},{k:'shares',l:'分享量'},{k:'followerGrowth',l:'涨粉量'},{k:'adCost',l:'投流金额'},{k:'rating',l:'运营评分'}];
-  html += `<select class="cos-select !w-auto !py-1.5 !text-xs" id="content-sort-by">${sortOpts.map(o=>`<option value="${o.k}" ${F.sortBy===o.k?'selected':''}>${o.l}</option>`).join('')}</select>`;
-  html += `<button class="cos-btn cos-btn-secondary cos-btn-xs" id="content-sort-dir" ${sortBy==='publishDate'?'disabled':''}>${sortBy==='publishDate'?'↓固定降序':(desc?'↓降序':'↑升序')}</button>`;
-  html += `<button class="cos-btn cos-btn-xs ${F.burst?'cos-btn-primary':'cos-btn-secondary'}" id="content-filter-burst">🔥爆款</button>`;
-  html += `<button class="cos-btn cos-btn-ghost cos-btn-xs" id="content-advanced-toggle">${F.advancedOpen?'收起筛选':'高级筛选'}</button>`;
+  html += `<select class="cos-select !w-auto min-w-[130px] !pr-10" id="content-sort-by">${sortOpts.map(o=>`<option value="${o.k}" ${F.sortBy===o.k?'selected':''}>${o.l}</option>`).join('')}</select>`;
+  html += `<button class="cos-btn cos-btn-secondary ml-auto" id="content-advanced-toggle" style="min-height:38px;padding:8px 14px;font-size:14px;">${F.advancedOpen?'收起筛选':'高级筛选'}</button>`;
   if(F.timeRange==='custom') html += `<span class="text-xs text-gray-500"><input class="cos-input !w-auto !px-2 !py-1 !text-xs" type="date" id="filter-date-from" value="${F.dateFrom||''}" style="width:130px"> ~ <input class="cos-input !w-auto !px-2 !py-1 !text-xs" type="date" id="filter-date-to" value="${F.dateTo||''}" style="width:130px"></span>`;
-  html += `<button class="cos-btn cos-btn-ghost cos-btn-xs text-gray-400 ml-auto" id="content-filter-clear">重置</button>`;
   html += `</div>`;
 
   if(activeTags.length) {
@@ -5707,8 +5717,13 @@ P.renderContents = (containerId) => {
     html += `</div>`;
   }
 
-  html += `<div id="content-advanced-panel" class="space-y-2 ${F.advancedOpen?'':'hidden'}">`;
-  html += `<div class="border-t pt-2"></div>`;
+  html += `<div id="content-advanced-panel" class="space-y-3 ${F.advancedOpen?'':'hidden'}">`;
+  html += `<div class="border-t pt-3"></div>`;
+  html += `<div class="flex flex-wrap items-center gap-2 text-xs">`;
+  html += `<span class="text-gray-400">快捷筛选：</span>`;
+  html += `<button class="filter-chip ${F.burst?'active':''}" id="content-filter-burst">🔥 爆款</button>`;
+  html += `<button class="filter-chip ml-auto" id="content-filter-clear">重置筛选</button>`;
+  html += `</div>`;
   html += P._renderFilterGroup('账号类型','accountType',accountTypes,F.accountType);
   html += P._renderFilterGroup('主题','theme',themes,F.theme);
   html += P._renderFilterGroup('形式','format',formats,F.format);
@@ -5913,8 +5928,6 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
   // 排序字段 + 方向
   const sb=document.getElementById('content-sort-by');
   if(sb) sb.onchange=()=>{F.sortBy=sb.value;P._resetPage();P._saveFilters();P.renderContents();};
-  const sd=document.getElementById('content-sort-dir');
-  if(sd) sd.onclick=()=>{if(F.sortBy!=='publishDate'){F.sortDesc=!F.sortDesc;P._resetPage();P._saveFilters();P.renderContents();}};
 
   // 爆款
   const bb=document.getElementById('content-filter-burst');
@@ -10513,6 +10526,1006 @@ P._setHeader = (title, subtitle) => {
   document.getElementById('page-title').textContent = title;
   document.getElementById('page-subtitle').textContent = subtitle;
   document.getElementById('page-actions').innerHTML = '';
+};
+
+})();
+</script>
+
+<!-- ======================================================================
+     Script 5.2: operation-ledgers.js — 五类运营台账统一录入与管理
+     ====================================================================== -->
+<script>
+;(function() {
+const P = window.P, S = window.S, C = window.C, H = window.H, UI = window.UI;
+if(!P || !S || !C || !H || !UI) return;
+
+// 在“数据与用户”分组中加入独立入口。脚本执行时路由尚未初始化，可安全扩展导航。
+const ledgerNavGroup = C.NAV_GROUPS.find(g => g.label === '数据与用户');
+if(ledgerNavGroup && !ledgerNavGroup.items.some(i => i.route === 'ledgers')) {
+  ledgerNavGroup.items.splice(1, 0, { id:'ledgers', icon:'🗂️', label:'运营台账', route:'ledgers' });
+}
+
+P._LEDGER_STORAGE_KEY = 'content_os_operation_ledgers_v1';
+P._LEDGER_CONFIG_KEY = 'operationLedgers';
+P._ledgerType = P._ledgerType || 'feedback';
+P._ledgerSearch = P._ledgerSearch || '';
+P._ledgerMonth = P._ledgerMonth || '';
+P._ledgerStatus = P._ledgerStatus || ''; // 兼容旧版单一状态筛选
+P._ledgerFiltersByType = P._ledgerFiltersByType || {};
+P._ledgerPageByType = P._ledgerPageByType || {};
+P._ledgerSelectedByType = P._ledgerSelectedByType || {};
+P._ledgerPageSize = 20;
+
+P._ledgerTypes = {
+  feedback: {
+    label:'用户反馈台账', shortLabel:'用户反馈', icon:'💬',
+    description:'集中记录用户问题、产品采纳和迭代闭环情况',
+    searchPlaceholder:'搜索用户昵称、反馈内容',
+    dateField:'date', filterFields:['feedbackType','severity','adopted','iterationProgress','followStatus'], summaryField:'followStatus', summaryValue:'已闭环', summaryLabel:'已闭环',
+    fields:[
+      {key:'date', label:'日期', type:'date', required:true},
+      {key:'userNickname', label:'用户昵称', type:'text', required:true, placeholder:'填写用户昵称'},
+      {key:'feedbackType', label:'反馈类型', type:'select', required:true, options:['BUG','体验建议','功能期待','新增需求']},
+      {key:'details', label:'具体内容', type:'textarea', required:true, full:true, placeholder:'完整记录用户反馈的场景、问题和诉求'},
+      {key:'frequency', label:'出现频次', type:'number', placeholder:'填写次数'},
+      {key:'severity', label:'严重等级', type:'select', options:['高','中','低']},
+      {key:'adopted', label:'产品是否采纳', type:'select', options:['是','否']},
+      {key:'iterationProgress', label:'迭代进度', type:'select', options:['待排期','开发中','已上线']},
+      {key:'followStatus', label:'跟进状态', type:'select', options:['待跟进','已闭环']}
+    ],
+    columns:['date','userNickname','feedbackType','details','frequency','severity','adopted','iterationProgress','followStatus']
+  },
+  community: {
+    label:'社群运维台账', shortLabel:'社群运维', icon:'👥',
+    description:'按日记录社群人数、互动、问题与运营动作',
+    searchPlaceholder:'搜索社群名称、活跃问题、运营动作',
+    dateField:'date', filterFields:[], sumField:'interactions', sumLabel:'互动量合计',
+    fields:[
+      {key:'date', label:'日期', type:'date', required:true},
+      {key:'communityName', label:'社群名称', type:'text', required:true, placeholder:'填写社群名称'},
+      {key:'totalMembers', label:'总人数', type:'number'},
+      {key:'newMembers', label:'新增人数', type:'number'},
+      {key:'leftMembers', label:'退群人数', type:'number'},
+      {key:'interactions', label:'今日互动量', type:'number'},
+      {key:'adCleanups', label:'广告清理数', type:'number'},
+      {key:'activeIssues', label:'活跃问题', type:'textarea', full:true, placeholder:'记录当天群内高频问题或讨论'},
+      {key:'actions', label:'今日运营动作', type:'textarea', full:true, placeholder:'记录发布内容、互动、答疑等动作'},
+      {key:'optimizations', label:'优化记录', type:'textarea', full:true, placeholder:'记录后续需要调整的运营方式'}
+    ],
+    columns:['date','communityName','totalMembers','newMembers','leftMembers','interactions','adCleanups','activeIssues','actions','optimizations']
+  },
+  contentData: {
+    label:'内容数据台账', shortLabel:'内容数据', icon:'📊',
+    description:'统一记录各平台内容表现、咨询和引流结果',
+    searchPlaceholder:'搜索内容标题、内容复盘',
+    dateField:'publishDate', filterFields:['platform','contentType'], sumField:'exposure', sumLabel:'曝光量合计',
+    fields:[
+      {key:'publishDate', label:'发布日期', type:'date', required:true},
+      {key:'platform', label:'平台', type:'select', required:true, options:['小红书','抖音','视频号']},
+      {key:'contentTitle', label:'内容标题', type:'contentSelect', required:true, full:true, placeholder:'请选择内容库已有标题'},
+      {key:'contentType', label:'内容类型', type:'select', options:['干货','路书','产品前瞻']},
+      {key:'exposure', label:'曝光量', type:'number'},
+      {key:'likes', label:'点赞数', type:'number'},
+      {key:'favorites', label:'收藏数', type:'number'},
+      {key:'shares', label:'转发数', type:'number'},
+      {key:'comments', label:'评论数', type:'number'},
+      {key:'privateInquiries', label:'私信咨询量', type:'number'},
+      {key:'groupJoins', label:'引流进群人数', type:'number'},
+      {key:'review', label:'内容优劣复盘', type:'textarea', full:true, placeholder:'记录内容表现好的原因、问题和下次优化方向'}
+    ],
+    columns:['publishDate','platform','contentTitle','contentType','exposure','likes','favorites','shares','comments','privateInquiries','groupJoins','review']
+  },
+  cooperation: {
+    label:'渠道资源合作台账', shortLabel:'渠道合作', icon:'🤝',
+    description:'记录渠道对接、合作方式、效果和下一步计划',
+    searchPlaceholder:'搜索渠道名称、对接人、联系方式',
+    filterFields:['channelType','cooperationMethod','cooperationProgress'], summaryField:'cooperationProgress', summaryValue:'已合作', summaryLabel:'已合作',
+    fields:[
+      {key:'channelName', label:'渠道名称', type:'text', required:true, placeholder:'填写渠道或账号名称'},
+      {key:'channelType', label:'渠道类型', type:'select', required:true, options:['社群','KOC','博主','其他']},
+      {key:'contactName', label:'对接人', type:'text', placeholder:'姓名 / 职位'},
+      {key:'contactInfo', label:'联系方式', type:'text', placeholder:'手机号、微信或其他联系方式'},
+      {key:'cooperationMethod', label:'合作方式', type:'select', options:['资源置换','免费','付费']},
+      {key:'paymentDetails', label:'付费情况', type:'textarea', full:true, conditional:'paid', placeholder:'选择付费后，填写费用、结算方式等'},
+      {key:'cooperationProgress', label:'合作进度', type:'select', options:['洽谈中','已合作','已结束']},
+      {key:'exposureEffect', label:'曝光效果', type:'text', placeholder:'如曝光量、阅读量或效果描述'},
+      {key:'leadCount', label:'引流人数', type:'number'},
+      {key:'nextPlan', label:'下次合作计划', type:'textarea', full:true, placeholder:'记录下次沟通或合作安排'},
+      {key:'reviewFocus', label:'合作情况复盘关注点', type:'textarea', full:true, placeholder:'记录渠道质量、配合度、转化和注意事项'}
+    ],
+    columns:['channelName','channelType','contactName','contactInfo','cooperationMethod','cooperationProgress','exposureEffect','leadCount','nextPlan','reviewFocus']
+  },
+  userProfile: {
+    label:'用户信息分层台账', shortLabel:'用户分层', icon:'🧩',
+    description:'沉淀用户来源、标签、车辆信息、活跃度和内测资格',
+    searchPlaceholder:'搜索用户昵称、联系方式、车型、职业',
+    dateField:'date', filterFields:['sourceChannel','userTags','vehicleType','activity','betaEligibility'], summaryField:'betaEligibility', summaryValue:'是', summaryLabel:'内测用户',
+    fields:[
+      {key:'date', label:'日期', type:'date', required:true},
+      {key:'userNickname', label:'用户昵称', type:'text', required:true, placeholder:'填写用户昵称'},
+      {key:'contactInfo', label:'联系方式', type:'text', placeholder:'手机号、微信或其他联系方式'},
+      {key:'sourceChannel', label:'来源渠道', type:'select', options:['小红书','抖音','社群']},
+      {key:'userTags', label:'用户标签（自驾类型）', type:'multi', full:true, options:['高频','长途自驾','短途周末游','家庭自驾','小众户外','新手自驾','房车','露营用户','年轻情侣旅行']},
+      {key:'vehicleType', label:'车辆类型', type:'select', options:['油车','新能源车']},
+      {key:'vehicleModel', label:'具体车型', type:'text', placeholder:'填写品牌和车型'},
+      {key:'occupation', label:'职业', type:'text', placeholder:'可在后续观察补充'},
+      {key:'activity', label:'活跃度', type:'select', options:['高','中','低']},
+      {key:'feedbackCount', label:'反馈次数', type:'number'},
+      {key:'betaEligibility', label:'内测资格', type:'select', options:['是','否']},
+      {key:'userLevel', label:'用户等级', type:'text', placeholder:'填写用户等级'},
+      {key:'notes', label:'备注', type:'textarea', full:true, placeholder:'补充用户特征、沟通情况或重点关注事项'}
+    ],
+    columns:['date','userNickname','contactInfo','sourceChannel','userTags','vehicleType','vehicleModel','occupation','activity','feedbackCount','betaEligibility','userLevel','notes']
+  }
+};
+
+P._ledgerEmptyData = () => ({
+  version:1,
+  updatedAt:'',
+  feedback:[], community:[], contentData:[], cooperation:[], userProfile:[]
+});
+
+P._ledgerNormalize = (value) => {
+  const base = P._ledgerEmptyData();
+  if(!value || typeof value !== 'object' || Array.isArray(value)) return base;
+  Object.keys(P._ledgerTypes).forEach(type => {
+    base[type] = Array.isArray(value[type]) ? value[type].filter(Boolean) : [];
+  });
+  base.version = 1;
+  base.updatedAt = value.updatedAt || '';
+  if(value._pendingSync) base._pendingSync = true;
+  return base;
+};
+
+P._ledgerReadLocal = () => {
+  try {
+    const raw = localStorage.getItem(P._LEDGER_STORAGE_KEY);
+    return raw ? P._ledgerNormalize(JSON.parse(raw)) : P._ledgerEmptyData();
+  } catch(e) {
+    console.warn('运营台账本地缓存读取失败：', e);
+    return P._ledgerEmptyData();
+  }
+};
+
+P._ledgerWriteLocal = (value) => {
+  try {
+    localStorage.setItem(P._LEDGER_STORAGE_KEY, JSON.stringify(value));
+    return true;
+  } catch(e) {
+    console.warn('运营台账本地缓存写入失败：', e);
+    return false;
+  }
+};
+
+P._ledgerSyncToCloud = async (value) => {
+  try {
+    if(typeof SUPABASE === 'undefined' || !SUPABASE?.from) return false;
+    const cloudValue = P._ledgerNormalize(value);
+    delete cloudValue._pendingSync;
+    const { error } = await SUPABASE
+      .from('config')
+      .upsert({ key:P._LEDGER_CONFIG_KEY, value:cloudValue }, { onConflict:'key' });
+    if(error) throw error;
+    try { localStorage.setItem('content_os_last_cloud_write', H.nowISO()); } catch(_) {}
+    return true;
+  } catch(e) {
+    console.warn('运营台账云端保存失败：', e?.message || e);
+    return false;
+  }
+};
+
+P._ledgerLoad = () => {
+  const cloud = P._ledgerNormalize(S?.db?.config?.[P._LEDGER_CONFIG_KEY]);
+  const local = P._ledgerReadLocal();
+  const hasCloud = Object.keys(P._ledgerTypes).some(k => cloud[k].length) || !!cloud.updatedAt;
+  const hasLocal = Object.keys(P._ledgerTypes).some(k => local[k].length) || !!local.updatedAt;
+  let chosen;
+
+  // 云端是正常主数据；仅当本地有尚未同步且更新更晚的记录时，优先保留本地版本。
+  if(local._pendingSync && String(local.updatedAt || '') >= String(cloud.updatedAt || '')) {
+    chosen = local;
+    P._ledgerSyncToCloud(local).then(ok => {
+      if(ok) {
+        const synced = P._ledgerNormalize(local);
+        delete synced._pendingSync;
+        P._ledgerWriteLocal(synced);
+        if(S?.db?.config) S.db.config[P._LEDGER_CONFIG_KEY] = synced;
+      }
+    });
+  } else if(hasCloud) {
+    chosen = cloud;
+    P._ledgerWriteLocal(cloud);
+  } else if(hasLocal) {
+    chosen = local;
+  } else {
+    chosen = P._ledgerEmptyData();
+  }
+
+  chosen = P._ledgerNormalize(chosen);
+  if(S?.db?.config) S.db.config[P._LEDGER_CONFIG_KEY] = chosen;
+  return chosen;
+};
+
+P._ledgerSave = async (value) => {
+  const data = P._ledgerNormalize(value);
+  data.updatedAt = H.nowISO();
+  if(S?.db?.config) S.db.config[P._LEDGER_CONFIG_KEY] = data;
+
+  const localPending = {...data, _pendingSync:true};
+  const localOK = P._ledgerWriteLocal(localPending);
+  const cloudOK = await P._ledgerSyncToCloud(data);
+  if(cloudOK) P._ledgerWriteLocal(data);
+  return {data, localOK, cloudOK};
+};
+
+P._ledgerField = (cfg, key) => cfg.fields.find(f => f.key === key) || {key, label:key, type:'text'};
+P._ledgerPage = (type) => P._ledgerPageByType[type] || 1;
+P._ledgerSetPage = (type, page) => { P._ledgerPageByType[type] = Math.max(1, Number(page) || 1); };
+P._ledgerSelected = (type) => {
+  const current = P._ledgerSelectedByType[type];
+  if(current instanceof Set) return current;
+  const selected = new Set(Array.isArray(current) ? current : []);
+  P._ledgerSelectedByType[type] = selected;
+  return selected;
+};
+P._ledgerNumber = (v) => {
+  if(v === '' || v == null) return 0;
+  const n = Number(String(v).replace(/,/g,''));
+  return Number.isFinite(n) ? n : 0;
+};
+P._ledgerAttr = (v) => H.esc(String(v ?? '')).replace(/\"/g,'&quot;').replace(/'/g,'&#39;');
+P._ledgerContentTitleOptions = (currentValue='') => {
+  const seen = new Set();
+  const titles = S.contents.all()
+    .slice()
+    .sort((a,b) => {
+      const dateCompare = String(b.publishDate || '').localeCompare(String(a.publishDate || ''));
+      if(dateCompare) return dateCompare;
+      return String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || ''));
+    })
+    .map(item => String(item.title || '').trim())
+    .filter(title => title && !seen.has(title) && seen.add(title));
+  const current = String(currentValue || '').trim();
+  if(current && !seen.has(current)) titles.unshift(current);
+  return titles;
+};
+P._ledgerDateValue = (record, cfg) => {
+  const raw = cfg.dateField ? record[cfg.dateField] : record.createdAt;
+  return H.parseDate(raw) || String(raw || '').slice(0,10);
+};
+
+P._ledgerBadge = (value) => {
+  const v = String(value || '');
+  if(!v) return '<span class="text-gray-400">-</span>';
+  const green = ['是','已闭环','已上线','已合作','高'];
+  const blue = ['开发中','小红书','抖音','视频号'];
+  const amber = ['待跟进','待排期','洽谈中','中'];
+  const gray = ['否','已结束','低'];
+  let cls = 'bg-gray-50 text-gray-600 border-gray-200';
+  if(green.includes(v)) cls = 'bg-green-50 text-green-700 border-green-200';
+  else if(blue.includes(v)) cls = 'bg-blue-50 text-blue-700 border-blue-200';
+  else if(amber.includes(v)) cls = 'bg-amber-50 text-amber-700 border-amber-200';
+  else if(gray.includes(v)) cls = 'bg-gray-100 text-gray-600 border-gray-200';
+  else if(v === 'BUG' || v === '新增需求') cls = 'bg-red-50 text-red-700 border-red-200';
+  return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium border ${cls}">${H.esc(v)}</span>`;
+};
+
+P._ledgerDisplay = (record, field, opts={}) => {
+  const value = record?.[field.key];
+  if(field.type === 'multi') {
+    const arr = Array.isArray(value) ? value : [];
+    if(!arr.length) return '<span class="text-gray-400">-</span>';
+    if(opts.detail) return `<div class="flex flex-wrap gap-1">${arr.map(v=>`<span class="cos-tag text-xs">${H.esc(v)}</span>`).join('')}</div>`;
+    const fullText = arr.join(' / ');
+    return `<div class="max-w-[260px] overflow-hidden whitespace-nowrap text-ellipsis" title="${P._ledgerAttr(fullText)}">${H.esc(fullText)}</div>`;
+  }
+  if(field.type === 'number') return value === '' || value == null ? '<span class="text-gray-400">-</span>' : `<span class="font-mono">${H.fmtNum(P._ledgerNumber(value))}</span>`;
+  if(field.type === 'date') return value ? H.esc(H.showDate(value)) : '<span class="text-gray-400">-</span>';
+  if(field.type === 'select') {
+    const text = String(value || '');
+    if(!text) return '<span class="text-gray-400">-</span>';
+    // 用户反馈：BUG 红色，其余反馈类型统一绿色。
+    if(field.key === 'feedbackType') {
+      const cls = text === 'BUG'
+        ? 'bg-red-50 text-red-700 border-red-200'
+        : 'bg-green-50 text-green-700 border-green-200';
+      return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium border ${cls}">${H.esc(text)}</span>`;
+    }
+    // 跟进状态：已闭环为灰色，其他状态统一绿色。
+    if(field.key === 'followStatus') {
+      const cls = text === '已闭环'
+        ? 'bg-gray-100 text-gray-600 border-gray-200'
+        : 'bg-green-50 text-green-700 border-green-200';
+      return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium border ${cls}">${H.esc(text)}</span>`;
+    }
+    return P._ledgerBadge(value);
+  }
+  const text = String(value || '').trim();
+  if(!text) return '<span class="text-gray-400">-</span>';
+  if(opts.detail) return `<div class="whitespace-pre-wrap leading-6">${H.esc(text)}</div>`;
+  // 所有运营台账列表中的文字统一单行展示，超出列宽显示省略号；详情中仍展示完整内容。
+  const maxWidth = field.key === 'details' ? '300px' : '260px';
+  return `<div style="max-width:${maxWidth}" class="overflow-hidden whitespace-nowrap text-ellipsis" title="${P._ledgerAttr(text)}">${H.esc(text)}</div>`;
+};
+
+P._ledgerGetFilters = (type) => {
+  if(!P._ledgerFiltersByType[type] || typeof P._ledgerFiltersByType[type] !== 'object') P._ledgerFiltersByType[type] = {};
+  return P._ledgerFiltersByType[type];
+};
+
+P._ledgerHasActiveFilters = (type) => {
+  const filters = P._ledgerGetFilters(type);
+  return !!(P._ledgerSearch || Object.values(filters).some(v => String(v || '').trim()));
+};
+
+P._ledgerFiltered = (type, data) => {
+  const cfg = P._ledgerTypes[type];
+  const search = String(P._ledgerSearch || '').trim().toLowerCase();
+  const filters = P._ledgerGetFilters(type);
+  return (data[type] || []).filter(record => {
+    if(search && !JSON.stringify(record).toLowerCase().includes(search)) return false;
+    for(const [key, selected] of Object.entries(filters)) {
+      if(!selected) continue;
+      const field = P._ledgerField(cfg, key);
+      const value = record?.[key];
+      if(field.type === 'multi') {
+        const arr = Array.isArray(value) ? value.map(String) : [];
+        if(!arr.includes(String(selected))) return false;
+      } else if(String(value || '') !== String(selected)) {
+        return false;
+      }
+    }
+    return true;
+  }).sort((a,b) => {
+    const da = P._ledgerDateValue(a,cfg) || String(a.updatedAt || a.createdAt || '');
+    const db = P._ledgerDateValue(b,cfg) || String(b.updatedAt || b.createdAt || '');
+    return db.localeCompare(da) || String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  });
+};
+
+P._ledgerSummary = (type, records) => {
+  const cfg = P._ledgerTypes[type];
+  const currentMonth = H.today().slice(0,7);
+  const thisMonth = records.filter(r => (P._ledgerDateValue(r,cfg) || '').startsWith(currentMonth)).length;
+  let thirdValue = 0;
+  let thirdLabel = '重点记录';
+  if(cfg.summaryField) {
+    thirdValue = records.filter(r => String(r[cfg.summaryField] || '') === cfg.summaryValue).length;
+    thirdLabel = cfg.summaryLabel;
+  } else if(cfg.sumField) {
+    thirdValue = records.reduce((s,r)=>s+P._ledgerNumber(r[cfg.sumField]),0);
+    thirdLabel = cfg.sumLabel;
+  }
+  const latest = records.slice().sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')))[0];
+  return {total:records.length, thisMonth, thirdValue, thirdLabel, latest:latest?.updatedAt || latest?.createdAt || ''};
+};
+
+
+// ===== 运营台账 Excel 导入 / 导出 =====
+// 导入与导出都严格使用 cfg.columns：字段顺序与当前列表保持一致，不包含“序号”和“操作”。
+P._ledgerExportFields = (cfg) => (cfg.columns || []).map(key => P._ledgerField(cfg,key));
+P._ledgerNormalizeHeader = (value) => String(value ?? '')
+  .replace(/\uFEFF/g,'')
+  .replace(/\s+/g,'')
+  .replace(/[（(][^）)]*[）)]/g,'')
+  .replace(/[：:]/g,'')
+  .trim()
+  .toLowerCase();
+P._ledgerExportValue = (record, field) => {
+  const value = record?.[field.key];
+  if(field.type === 'multi') return (Array.isArray(value) ? value : []).join(' / ');
+  if(field.type === 'date') return H.parseDate(value) || String(value || '');
+  if(field.type === 'number') return value === '' || value == null ? '' : P._ledgerNumber(value);
+  return value == null ? '' : String(value);
+};
+P._ledgerImportValue = (value, field) => {
+  if(value == null) value = '';
+  if(field.type === 'date') return H.parseDate(value) || String(value || '').trim();
+  if(field.type === 'number') return String(value).trim() === '' ? '' : P._ledgerNumber(value);
+  if(field.type === 'multi') {
+    const raw = Array.isArray(value) ? value : String(value || '').split(/[、,，;；|/\\\n]+/);
+    return [...new Set(raw.map(v=>String(v).trim()).filter(Boolean))];
+  }
+  return String(value || '').trim();
+};
+P._ledgerRecordSignature = (record, cfg) => P._ledgerExportFields(cfg)
+  .map(field => {
+    const value = record?.[field.key];
+    return field.type === 'multi'
+      ? (Array.isArray(value) ? value.map(String).sort().join('/') : '')
+      : String(value ?? '').trim();
+  }).join('¦');
+
+P._exportLedgerExcel = (type) => {
+  const cfg = P._ledgerTypes[type];
+  if(!cfg) return;
+  if(typeof XLSX === 'undefined') {
+    UI.toast('Excel 组件还在加载，请稍后重试', 'error');
+    return;
+  }
+  const data = P._ledgerLoad();
+  // 有筛选时导出当前筛选结果；无筛选时导出当前分类全部记录。
+  const records = P._ledgerHasActiveFilters(type) ? P._ledgerFiltered(type, data) : (data[type] || []);
+  const fields = P._ledgerExportFields(cfg);
+  const rows = [fields.map(field=>field.label)];
+  records.forEach(record => rows.push(fields.map(field=>P._ledgerExportValue(record,field))));
+
+  const ws = XLSX.utils.aoa_to_sheet(rows, {cellDates:true});
+  ws['!cols'] = fields.map(field => {
+    if(field.type === 'textarea') return {wch:32};
+    if(field.type === 'number') return {wch:12};
+    if(field.type === 'date') return {wch:13};
+    if(field.type === 'multi') return {wch:28};
+    return {wch:Math.min(28, Math.max(12, String(field.label || '').length * 2 + 4))};
+  });
+  if(fields.length) ws['!autofilter'] = {ref:`A1:${XLSX.utils.encode_col(fields.length-1)}${Math.max(1,rows.length)}`};
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, String(cfg.shortLabel || '运营台账').slice(0,31));
+  const suffix = P._ledgerHasActiveFilters(type) ? '_筛选结果' : '';
+  XLSX.writeFile(wb, `${cfg.shortLabel}台账${suffix}_${H.today()}.xlsx`);
+  UI.toast(records.length ? `已导出 ${records.length} 条${cfg.shortLabel}记录` : '已导出空白表格模板');
+  try { window.Auth?.log?.('运营台账', '导出表格', cfg.label, `${records.length}条`).catch(()=>{}); } catch(_) {}
+};
+
+P._importLedgerExcel = (type) => {
+  const cfg = P._ledgerTypes[type];
+  if(!cfg) return;
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.xls,.csv';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if(!file) return;
+    if(typeof XLSX === 'undefined') {
+      UI.toast('Excel 组件还在加载，请稍后重试', 'error');
+      return;
+    }
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(new Uint8Array(buf), {type:'array', cellDates:true});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:true});
+      if(!rows.length) throw new Error('表格中没有可导入的数据');
+
+      const fields = P._ledgerExportFields(cfg);
+      const aliases = {
+        userTags:['用户标签','自驾类型'],
+        vehicleType:['车辆类型','油车/新能源车','能源类型'],
+        vehicleModel:['具体车型','车型'],
+        betaEligibility:['内测资格','内测用户'],
+        feedbackType:['反馈类型','问题类型'],
+        followStatus:['跟进状态','闭环状态'],
+        groupJoins:['引流进群人数','进群人数'],
+        reviewFocus:['合作情况复盘关注点','合作复盘'],
+        privateInquiries:['私信咨询量','私信量']
+      };
+      const headerMap = new Map();
+      fields.forEach(field => {
+        [field.label, field.key, ...(aliases[field.key] || [])].forEach(name => {
+          const normalized = P._ledgerNormalizeHeader(name);
+          if(normalized) headerMap.set(normalized, field.key);
+        });
+      });
+
+      let headerRowIndex = -1;
+      let columnToKey = [];
+      for(let i=0;i<Math.min(rows.length,10);i++) {
+        const mapped = (rows[i] || []).map(cell => headerMap.get(P._ledgerNormalizeHeader(cell)) || '');
+        const matchCount = mapped.filter(Boolean).length;
+        if(matchCount >= Math.min(2, fields.length)) {
+          headerRowIndex = i;
+          columnToKey = mapped;
+          break;
+        }
+      }
+      if(headerRowIndex < 0) {
+        throw new Error(`未识别到表头，请使用以下字段顺序：${fields.map(f=>f.label).join('、')}`);
+      }
+
+      const data = P._ledgerLoad();
+      const list = [...(data[type] || [])];
+      const existing = new Set(list.map(record=>P._ledgerRecordSignature(record,cfg)));
+      const now = H.nowISO();
+      const operator = window.Auth?.currentUser?.email || window.Auth?.currentUser?.username || '';
+      let imported = 0, skipped = 0, duplicate = 0;
+
+      for(let i=headerRowIndex+1;i<rows.length;i++) {
+        const row = rows[i] || [];
+        const raw = {};
+        columnToKey.forEach((key,index) => {
+          if(!key) return;
+          const field = P._ledgerField(cfg,key);
+          raw[key] = P._ledgerImportValue(row[index],field);
+        });
+        const hasValue = fields.some(field => {
+          const value = raw[field.key];
+          return Array.isArray(value) ? value.length : String(value ?? '').trim();
+        });
+        if(!hasValue) continue;
+        const missing = fields.find(field => field.required && (Array.isArray(raw[field.key]) ? !raw[field.key].length : !String(raw[field.key] ?? '').trim()));
+        if(missing) { skipped++; continue; }
+
+        const record = {
+          ...raw,
+          id:H.uid('ledger_'),
+          createdAt:now,
+          updatedAt:now,
+          createdBy:operator,
+          updatedBy:operator
+        };
+        const signature = P._ledgerRecordSignature(record,cfg);
+        if(existing.has(signature)) { duplicate++; continue; }
+        existing.add(signature);
+        list.push(record);
+        imported++;
+      }
+
+      if(!imported) {
+        const detail = duplicate ? `，其中重复 ${duplicate} 条` : '';
+        UI.toast(`没有新增记录${detail}${skipped ? `，缺少必填字段 ${skipped} 条` : ''}`, 'warn');
+        return;
+      }
+      data[type] = list;
+      const result = await P._ledgerSave(data);
+      P._ledgerSetPage(type,1);
+      P._ledgerSelected(type).clear();
+      P.renderLedgers();
+      const details = [duplicate ? `重复 ${duplicate} 条` : '', skipped ? `缺少必填字段 ${skipped} 条` : ''].filter(Boolean).join('，');
+      UI.toast(`导入完成：新增 ${imported} 条${details ? `，跳过${details}` : ''}${result.cloudOK ? '' : '；云端同步失败，已保存在本机'}`, result.cloudOK ? 'success' : 'warn');
+      try { window.Auth?.log?.('运营台账', '导入表格', cfg.label, `${imported}条`).catch(()=>{}); } catch(_) {}
+    } catch(err) {
+      console.error('运营台账表格导入失败：', err);
+      UI.toast('导入失败：' + (err?.message || '文件格式不正确'), 'error');
+    }
+  };
+  input.click();
+};
+
+// ===== 运营台账批量操作 =====
+P._openLedgerBatchEdit = async (type) => {
+  const cfg = P._ledgerTypes[type];
+  const selected = P._ledgerSelected(type);
+  if(!cfg || !selected.size) return;
+  const editableFields = cfg.fields.filter(field => !field.conditional);
+  const html = `<div class="p-6">
+    <h2 class="text-base font-semibold text-gray-900 mb-1">批量修改${H.esc(cfg.shortLabel)}</h2>
+    <p class="text-sm text-gray-500 mb-5">已选中 ${selected.size} 条记录，请选择一个字段统一修改</p>
+    <div class="space-y-4">
+      <div><label class="cos-label">修改字段</label><select class="cos-select !pr-10" id="ledger-batch-field"><option value="">请选择字段</option>${editableFields.map(field=>`<option value="${P._ledgerAttr(field.key)}">${H.esc(field.label)}</option>`).join('')}</select></div>
+      <div id="ledger-batch-value"></div>
+      <div class="flex justify-end gap-3 pt-4 border-t border-gray-100">
+        <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+        <button type="button" class="cos-btn cos-btn-primary" id="ledger-batch-save" disabled>确认修改</button>
+      </div>
+    </div>
+  </div>`;
+  const promise = UI.openModal(html, {width:'max-w-lg'});
+  setTimeout(()=>{
+    const fieldEl = document.getElementById('ledger-batch-field');
+    const valueBox = document.getElementById('ledger-batch-value');
+    const saveBtn = document.getElementById('ledger-batch-save');
+    let currentField = null;
+    const renderValue = () => {
+      currentField = P._ledgerField(cfg,fieldEl.value);
+      if(!fieldEl.value) { valueBox.innerHTML=''; saveBtn.disabled=true; return; }
+      saveBtn.disabled=false;
+      if(currentField.type === 'multi') {
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><div class="flex flex-wrap gap-2 rounded-lg border border-gray-200 bg-white p-3">${(currentField.options||[]).map(option=>`<label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 cursor-pointer text-sm"><input type="checkbox" name="ledgerBatchMulti" value="${P._ledgerAttr(option)}" class="rounded border-gray-300 text-blue-600"><span>${H.esc(option)}</span></label>`).join('')}</div><p class="text-xs text-gray-400 mt-1">不勾选任何选项会清空该字段</p>`;
+      } else if(currentField.type === 'contentSelect') {
+        const titleOptions = P._ledgerContentTitleOptions();
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><select class="cos-select !pr-10" id="ledger-batch-input"><option value="">清空该字段</option>${titleOptions.map(option=>`<option value="${P._ledgerAttr(option)}">${H.esc(option)}</option>`).join('')}</select><p class="text-xs text-gray-400 mt-1.5">从「内容库」已有标题中选择</p>`;
+      } else if(currentField.type === 'select') {
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><select class="cos-select !pr-10" id="ledger-batch-input"><option value="">清空该字段</option>${(currentField.options||[]).map(option=>`<option value="${P._ledgerAttr(option)}">${H.esc(option)}</option>`).join('')}</select>`;
+      } else if(currentField.type === 'textarea') {
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><textarea class="cos-textarea" id="ledger-batch-input" placeholder="留空会清空该字段"></textarea>`;
+      } else {
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><input class="cos-input" id="ledger-batch-input" type="${P._ledgerAttr(currentField.type || 'text')}" placeholder="留空会清空该字段">`;
+      }
+    };
+    fieldEl.onchange = renderValue;
+    saveBtn.onclick = () => {
+      if(!currentField?.key) return;
+      let value;
+      if(currentField.type === 'multi') value = [...valueBox.querySelectorAll('input[name="ledgerBatchMulti"]:checked')].map(el=>el.value);
+      else value = valueBox.querySelector('#ledger-batch-input')?.value ?? '';
+      value = P._ledgerImportValue(value,currentField);
+      UI.closeModal({key:currentField.key,value});
+    };
+  },40);
+  const result = await promise;
+  if(!result || result === 'cancel') return;
+  const data = P._ledgerLoad();
+  const now = H.nowISO();
+  const operator = window.Auth?.currentUser?.email || window.Auth?.currentUser?.username || '';
+  data[type] = (data[type] || []).map(record => {
+    if(!selected.has(record.id)) return record;
+    const next = {...record, [result.key]:result.value, updatedAt:now, updatedBy:operator};
+    if(result.key === 'cooperationMethod' && result.value !== '付费') next.paymentDetails = '';
+    return next;
+  });
+  const saveResult = await P._ledgerSave(data);
+  selected.clear();
+  P.renderLedgers();
+  UI.toast(saveResult.cloudOK ? '批量修改完成' : '批量修改已保存在本机，云端同步失败', saveResult.cloudOK ? 'success' : 'warn');
+};
+
+P._deleteLedgerBatch = async (type) => {
+  const cfg = P._ledgerTypes[type];
+  const selected = P._ledgerSelected(type);
+  if(!cfg || !selected.size) return;
+  const ok = await UI.confirm('批量删除', `确定删除已选择的 ${selected.size} 条${cfg.shortLabel}记录吗？`, {danger:true,confirmText:'确认删除'});
+  if(!ok) return;
+  const data = P._ledgerLoad();
+  data[type] = (data[type] || []).filter(record=>!selected.has(record.id));
+  const result = await P._ledgerSave(data);
+  selected.clear();
+  P.renderLedgers();
+  UI.toast(result.cloudOK ? '已批量删除' : '已从本机删除，云端同步失败', result.cloudOK ? 'success' : 'warn');
+};
+
+P._ledgerRenderField = (field, record={}) => {
+  const value = record[field.key] ?? (field.type === 'date' ? H.today() : '');
+  const required = field.required ? '<span class="text-red-500 ml-0.5">*</span>' : '';
+  const span = field.full ? 'md:col-span-2' : '';
+  const conditional = field.conditional === 'paid' ? ' data-ledger-paid-field' : '';
+  if(field.type === 'multi') {
+    const selected = Array.isArray(value) ? value : [];
+    return `<div class="${span}"><label class="cos-label">${H.esc(field.label)}${required}</label>
+      <div class="flex flex-wrap gap-2 rounded-lg border border-gray-200 bg-white p-3">
+        ${(field.options||[]).map(option=>`<label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-blue-50 cursor-pointer text-sm">
+          <input type="checkbox" name="${P._ledgerAttr(field.key)}" value="${P._ledgerAttr(option)}" ${selected.includes(option)?'checked':''} class="rounded border-gray-300 text-blue-600">
+          <span>${H.esc(option)}</span>
+        </label>`).join('')}
+      </div>
+    </div>`;
+  }
+  let control = '';
+  if(field.type === 'contentSelect') {
+    const options = P._ledgerContentTitleOptions(value);
+    control = `<select class="cos-select" name="${P._ledgerAttr(field.key)}">
+      <option value="">${options.length ? '请选择内容库标题' : '内容库暂无可选标题'}</option>
+      ${options.map(option=>`<option value="${P._ledgerAttr(option)}" ${String(value)===String(option)?'selected':''}>${H.esc(option)}</option>`).join('')}
+    </select><p class="text-xs text-gray-400 mt-1.5">标题来源于「内容库」，按最新发布时间优先展示</p>`;
+  } else if(field.type === 'select') {
+    control = `<select class="cos-select" name="${P._ledgerAttr(field.key)}"><option value="">请选择</option>${(field.options||[]).map(option=>`<option value="${P._ledgerAttr(option)}" ${String(value)===String(option)?'selected':''}>${H.esc(option)}</option>`).join('')}</select>`;
+  } else if(field.type === 'textarea') {
+    control = `<textarea class="cos-textarea" name="${P._ledgerAttr(field.key)}" placeholder="${P._ledgerAttr(field.placeholder||'')}">${H.esc(value||'')}</textarea>`;
+  } else {
+    control = `<input class="cos-input" type="${P._ledgerAttr(field.type||'text')}" name="${P._ledgerAttr(field.key)}" value="${P._ledgerAttr(value)}" placeholder="${P._ledgerAttr(field.placeholder||'')}">`;
+  }
+  return `<div class="${span}"${conditional}><label class="cos-label">${H.esc(field.label)}${required}</label>${control}</div>`;
+};
+
+P._openLedgerModal = async (type, id=null) => {
+  const cfg = P._ledgerTypes[type];
+  const data = P._ledgerLoad();
+  const old = id ? (data[type] || []).find(r => r.id === id) : null;
+  const title = old ? `编辑${cfg.label}` : `新增${cfg.label}`;
+  const html = `<div class="p-6 pt-5">
+    <h2>${H.esc(title)}</h2>
+    <form id="ledger-record-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+      ${cfg.fields.map(field=>P._ledgerRenderField(field, old||{})).join('')}
+      <div class="md:col-span-2 flex justify-end gap-3 pt-3 border-t border-gray-100 mt-1">
+        <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+        <button type="button" class="cos-btn cos-btn-primary" id="ledger-record-save">保存记录</button>
+      </div>
+    </form>
+  </div>`;
+  const promise = UI.openModal(html, {width:'max-w-4xl'});
+
+  setTimeout(() => {
+    const form = document.getElementById('ledger-record-form');
+    const saveBtn = document.getElementById('ledger-record-save');
+    const method = form?.querySelector('[name="cooperationMethod"]');
+    const paidField = form?.querySelector('[data-ledger-paid-field]');
+    const updatePaid = () => {
+      if(!paidField) return;
+      paidField.style.display = method?.value === '付费' ? '' : 'none';
+      if(method?.value !== '付费') {
+        const el = paidField.querySelector('[name="paymentDetails"]');
+        if(el) el.value = '';
+      }
+    };
+    if(method) { method.onchange = updatePaid; updatePaid(); }
+
+    if(saveBtn && form) saveBtn.onclick = () => {
+      const raw = UI.readForm(form);
+      cfg.fields.filter(f=>f.type==='multi').forEach(f => {
+        raw[f.key] = [...form.querySelectorAll(`input[name="${f.key}"]:checked`)].map(el=>el.value);
+      });
+      cfg.fields.filter(f=>f.type==='number').forEach(f => {
+        raw[f.key] = raw[f.key] === '' ? '' : P._ledgerNumber(raw[f.key]);
+      });
+      const missing = cfg.fields.find(f => {
+        if(!f.required) return false;
+        const v = raw[f.key];
+        return Array.isArray(v) ? !v.length : !String(v || '').trim();
+      });
+      if(missing) {
+        UI.toast(`请填写${missing.label}`, 'warn');
+        const input = form.querySelector(`[name="${missing.key}"]`);
+        if(input) input.focus();
+        return;
+      }
+      UI.closeModal(raw);
+    };
+  }, 40);
+
+  const formData = await promise;
+  if(!formData || formData === 'cancel') return;
+
+  const now = H.nowISO();
+  const operator = window.Auth?.currentUser?.email || window.Auth?.currentUser?.username || '';
+  const record = {
+    ...(old || {}),
+    ...formData,
+    id: old?.id || H.uid('ledger_'),
+    createdAt: old?.createdAt || now,
+    updatedAt: now,
+    createdBy: old?.createdBy || operator,
+    updatedBy: operator
+  };
+  const list = [...(data[type] || [])];
+  if(old) {
+    const index = list.findIndex(r => r.id === old.id);
+    if(index >= 0) list[index] = record;
+  } else list.unshift(record);
+  data[type] = list;
+
+  const result = await P._ledgerSave(data);
+  P._ledgerSetPage(type, 1);
+  P.renderLedgers();
+  if(result.cloudOK) UI.toast(old ? '记录已更新' : '记录已保存');
+  else UI.toast('记录已保存在本机，云端同步失败，请稍后重试', 'warn');
+  try { window.Auth?.log?.('运营台账', old?'编辑记录':'新增记录', cfg.label, record.userNickname || record.contentTitle || record.channelName || record.communityName || '').catch(()=>{}); } catch(_) {}
+};
+
+P._deleteLedgerRecord = async (type, id) => {
+  const cfg = P._ledgerTypes[type];
+  const ok = await UI.confirm('删除记录', `确定删除这条${cfg.shortLabel}记录吗？`, {danger:true, confirmText:'删除'});
+  if(!ok) return;
+  const data = P._ledgerLoad();
+  const old = (data[type] || []).find(r => r.id === id);
+  data[type] = (data[type] || []).filter(r => r.id !== id);
+  const result = await P._ledgerSave(data);
+  UI.closeDrawer();
+  P.renderLedgers();
+  if(result.cloudOK) UI.toast('记录已删除');
+  else UI.toast('已从本机删除，云端同步失败，请稍后重试', 'warn');
+  try { window.Auth?.log?.('运营台账', '删除记录', cfg.label, old?.userNickname || old?.contentTitle || old?.channelName || old?.communityName || '').catch(()=>{}); } catch(_) {}
+};
+
+P._openLedgerDrawer = (type, id) => {
+  const cfg = P._ledgerTypes[type];
+  const data = P._ledgerLoad();
+  const record = (data[type] || []).find(r => r.id === id);
+  if(!record) return;
+  const mainTitle = type === 'feedback'
+    ? (record.details || record.userNickname || cfg.shortLabel)
+    : (record.userNickname || record.contentTitle || record.channelName || record.communityName || cfg.shortLabel);
+  const detailFields = type === 'feedback' ? cfg.fields.filter(field => field.key !== 'details') : cfg.fields;
+  const html = `<div class="p-6">
+    <div class="flex items-start justify-between gap-4 mb-5">
+      <div class="min-w-0">
+        <div class="flex items-center gap-2 mb-1"><span class="text-xl">${cfg.icon}</span><span class="cos-tag">${H.esc(cfg.shortLabel)}</span></div>
+        <h2 class="text-lg font-semibold text-gray-900 break-words whitespace-pre-wrap leading-7">${H.esc(mainTitle)}</h2>
+        <div class="text-xs text-gray-400 mt-1">更新于 ${record.updatedAt ? H.fmtDateTime(record.updatedAt) : '-'}</div>
+      </div>
+      <button class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100" data-drawer-close>&times;</button>
+    </div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
+      ${detailFields.map(field=>`<div class="${field.full?'sm:col-span-2':''}">
+        <div class="text-xs text-gray-400 mb-1">${H.esc(field.label)}</div>
+        <div class="text-sm text-gray-800 min-h-[22px]">${P._ledgerDisplay(record, field, {detail:true})}</div>
+      </div>`).join('')}
+    </div>
+    <div class="flex justify-end gap-3 mt-8 pt-5 border-t border-gray-100">
+      <button class="cos-btn cos-btn-danger" data-ledger-drawer-delete="${H.esc(id)}">删除</button>
+      <button class="cos-btn cos-btn-primary" data-ledger-drawer-edit="${H.esc(id)}">编辑记录</button>
+    </div>
+  </div>`;
+  UI.openDrawer(html);
+  const box = document.getElementById('drawer-box');
+  const edit = box.querySelector('[data-ledger-drawer-edit]');
+  const del = box.querySelector('[data-ledger-drawer-delete]');
+  if(edit) edit.onclick = () => { UI.closeDrawer(); P._openLedgerModal(type, id); };
+  if(del) del.onclick = () => P._deleteLedgerRecord(type, id);
+};
+
+P.renderLedgers = () => {
+  const type = P._ledgerTypes[P._ledgerType] ? P._ledgerType : 'feedback';
+  P._ledgerType = type;
+  const cfg = P._ledgerTypes[type];
+  const data = P._ledgerLoad();
+  const allRecords = data[type] || [];
+  const filtered = P._ledgerFiltered(type, data);
+  const summary = P._ledgerSummary(type, allRecords);
+  const selected = P._ledgerSelected(type);
+  const validIds = new Set(allRecords.map(record=>record.id));
+  [...selected].forEach(id=>{ if(!validIds.has(id)) selected.delete(id); });
+  const pageSize = P._ledgerPageSize;
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  let page = Math.min(P._ledgerPage(type), totalPages);
+  P._ledgerSetPage(type, page);
+  const pageStart = (page-1)*pageSize;
+  const pageItems = filtered.slice(pageStart, page*pageSize);
+  const activeFilters = P._ledgerGetFilters(type);
+  const filterFields = (cfg.filterFields || []).map(key => P._ledgerField(cfg,key)).filter(Boolean);
+
+  let html = `
+    <div class="cos-card p-2 mb-5 overflow-x-auto">
+      <div class="flex min-w-max gap-1">
+        ${Object.entries(P._ledgerTypes).map(([key,item])=>`<button class="px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${key===type?'bg-blue-600 text-white shadow-sm':'text-gray-600 hover:bg-gray-100'}" data-ledger-type="${key}">
+          <span class="mr-1.5">${item.icon}</span>${H.esc(item.shortLabel)}
+        </button>`).join('')}
+      </div>
+    </div>
+
+    <div class="flex items-start justify-between gap-4 mb-5">
+      <div><h2 class="text-lg font-semibold text-gray-900">${cfg.icon} ${H.esc(cfg.label)}</h2><p class="text-sm text-gray-500 mt-1">${H.esc(cfg.description)}</p></div>
+      <div class="flex items-center gap-2 shrink-0">
+        <button class="cos-btn cos-btn-primary" id="ledger-add-btn">＋ 新增记录</button>
+        <button class="cos-btn cos-btn-secondary" id="ledger-import-btn" title="按照当前列表字段顺序导入">📥 导入表格</button>
+        <button class="cos-btn cos-btn-secondary" id="ledger-export-btn" title="字段顺序与当前列表一致">📤 导出表格</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
+      <div class="cos-card p-4"><div class="text-xs text-gray-400">记录总数</div><div class="text-2xl font-bold text-gray-900 mt-1">${summary.total}</div></div>
+      <div class="cos-card p-4"><div class="text-xs text-gray-400">本月新增</div><div class="text-2xl font-bold text-blue-600 mt-1">${summary.thisMonth}</div></div>
+      <div class="cos-card p-4"><div class="text-xs text-gray-400">${H.esc(summary.thirdLabel)}</div><div class="text-2xl font-bold text-green-600 mt-1">${H.fmtNum(summary.thirdValue)}</div></div>
+      <div class="cos-card p-4"><div class="text-xs text-gray-400">最近更新</div><div class="text-sm font-semibold text-gray-700 mt-2">${summary.latest ? H.fmtDateTime(summary.latest) : '-'}</div></div>
+    </div>
+
+    <div class="cos-card p-4 mb-4">
+      <div class="flex flex-wrap items-center gap-3">
+        <div class="relative flex-1 min-w-[240px] max-w-[360px]">
+          <input id="ledger-search" class="cos-input pl-8" value="${P._ledgerAttr(P._ledgerSearch)}" placeholder="${H.esc(cfg.searchPlaceholder || '搜索当前台账')}">
+          <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
+        </div>
+        ${filterFields.map(field=>`<select class="cos-select !w-auto min-w-[130px] !pr-10" data-ledger-filter="${H.esc(field.key)}"><option value="">${H.esc(field.label.replace(/（.*?）/g,''))}</option>${(field.options||[]).map(o=>`<option value="${H.esc(o)}" ${String(activeFilters[field.key]||'')===String(o)?'selected':''}>${H.esc(o)}</option>`).join('')}</select>`).join('')}
+        ${P._ledgerHasActiveFilters(type) ? '<button class="cos-btn cos-btn-secondary" id="ledger-clear-filter">清空筛选</button>' : ''}
+      </div>
+    </div>`;
+
+  if(selected.size > 0) {
+    html += `<div class="cos-card p-3 mb-4 flex flex-wrap items-center justify-between gap-3" style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:12px">
+      <span class="text-sm font-medium text-blue-700">已选中 <b>${selected.size}</b> 条记录</span>
+      <div class="flex flex-wrap items-center gap-2">
+        <button class="cos-btn cos-btn-primary cos-btn-sm" id="ledger-batch-edit">✏️ 批量修改</button>
+        <button class="cos-btn cos-btn-danger cos-btn-sm" id="ledger-batch-delete">🗑️ 批量删除</button>
+        <button class="cos-btn cos-btn-secondary cos-btn-sm" id="ledger-batch-select-filtered">☑️ 全选筛选结果</button>
+        <button class="cos-btn cos-btn-ghost cos-btn-sm" id="ledger-batch-clear">取消选择</button>
+      </div>
+    </div>`;
+  }
+
+  html += '<div class="cos-card overflow-hidden">';
+  // 无论是否已有数据，都展示完整字段表头。序号和操作只用于页面，不进入导入/导出文件。
+  html += '<div class="overflow-x-auto"><table class="cos-table min-w-max"><thead><tr>';
+  html += '<th class="text-center" style="width:42px"><input type="checkbox" id="ledger-select-page" title="全选本页"></th><th style="width:60px;text-align:left;padding-left:16px">序号</th>';
+  cfg.columns.forEach(key => { html += `<th>${H.esc(P._ledgerField(cfg,key).label)}</th>`; });
+  html += '<th>操作</th></tr></thead><tbody>';
+  if(!pageItems.length) {
+    const emptyText = filtered.length === 0 && allRecords.length ? '没有符合筛选条件的记录' : `暂无${H.esc(cfg.shortLabel)}记录`;
+    const colspan = cfg.columns.length + 3;
+    html += `<tr><td colspan="${colspan}" class="py-14 text-center"><div class="text-gray-400 text-sm">${emptyText}</div></td></tr>`;
+  } else {
+    pageItems.forEach((record,index) => {
+      const checked = selected.has(record.id) ? ' checked' : '';
+      const seq = pageStart + index + 1;
+      html += `<tr class="cursor-pointer hover:bg-blue-50/40" data-ledger-view="${H.esc(record.id)}">`;
+      html += `<td class="text-center"><input type="checkbox" class="ledger-select-cb" data-ledger-id="${H.esc(record.id)}"${checked}></td>`;
+      html += `<td class="text-xs text-gray-400" style="text-align:left;padding-left:16px">${seq}</td>`;
+      cfg.columns.forEach(key => { const field=P._ledgerField(cfg,key); html += `<td class="align-top">${P._ledgerDisplay(record,field)}</td>`; });
+      html += `<td class="whitespace-nowrap"><div class="flex gap-0.5">
+        <button class="cos-btn cos-btn-ghost cos-btn-xs" data-ledger-edit="${H.esc(record.id)}" title="编辑">✏️</button>
+        <button class="cos-btn cos-btn-ghost cos-btn-xs" data-ledger-delete="${H.esc(record.id)}" title="删除">🗑️</button>
+      </div></td></tr>`;
+    });
+  }
+  html += '</tbody></table></div>';
+  if(filtered.length) {
+    html += `<div class="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-gray-100 text-xs text-gray-500"><span>共 ${filtered.length} 条 · 第 ${page}/${totalPages} 页</span>`;
+    if(totalPages > 1) {
+      html += '<div class="flex items-center gap-1">';
+      html += `<button class="cos-btn cos-btn-secondary cos-btn-xs" data-ledger-page="prev" ${page<=1?'disabled':''}>上一页</button>`;
+      const maxButtons = 7;
+      let start = Math.max(1, page-Math.floor(maxButtons/2));
+      let end = Math.min(totalPages, start+maxButtons-1);
+      if(end-start < maxButtons-1) start = Math.max(1,end-maxButtons+1);
+      for(let p=start;p<=end;p++) html += `<button class="cos-btn cos-btn-xs ${p===page?'cos-btn-primary':'cos-btn-ghost'}" data-ledger-page="${p}">${p}</button>`;
+      html += `<button class="cos-btn cos-btn-secondary cos-btn-xs" data-ledger-page="next" ${page>=totalPages?'disabled':''}>下一页</button></div>`;
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('page-body').innerHTML = html;
+
+  document.querySelectorAll('[data-ledger-type]').forEach(btn => btn.onclick = () => {
+    P._ledgerType = btn.dataset.ledgerType;
+    P._ledgerSearch = '';
+    P._ledgerMonth = '';
+    P._ledgerStatus = '';
+    P._ledgerSetPage(P._ledgerType,1);
+    P.renderLedgers();
+  });
+  const add = document.getElementById('ledger-add-btn');
+  if(add) add.onclick = () => P._openLedgerModal(type);
+  const importBtn = document.getElementById('ledger-import-btn');
+  if(importBtn) importBtn.onclick = () => P._importLedgerExcel(type);
+  const exportBtn = document.getElementById('ledger-export-btn');
+  if(exportBtn) exportBtn.onclick = () => P._exportLedgerExcel(type);
+
+  const search = document.getElementById('ledger-search');
+  if(search) {
+    let composing = false, timer = null;
+    search.addEventListener('compositionstart',()=>composing=true);
+    search.addEventListener('compositionend',e=>{composing=false;P._ledgerSearch=e.target.value;P._ledgerSetPage(type,1);P.renderLedgers();});
+    search.addEventListener('input',e=>{if(composing)return;clearTimeout(timer);timer=setTimeout(()=>{P._ledgerSearch=e.target.value;P._ledgerSetPage(type,1);P.renderLedgers();},250);});
+  }
+  document.querySelectorAll('[data-ledger-filter]').forEach(select => {
+    select.onchange = () => {
+      const filters = P._ledgerGetFilters(type);
+      filters[select.dataset.ledgerFilter] = select.value;
+      P._ledgerSetPage(type,1);
+      P.renderLedgers();
+    };
+  });
+  const clear = document.getElementById('ledger-clear-filter');
+  if(clear) clear.onclick = () => {
+    P._ledgerSearch='';
+    P._ledgerMonth='';
+    P._ledgerStatus='';
+    P._ledgerFiltersByType[type] = {};
+    P._ledgerSetPage(type,1);
+    P.renderLedgers();
+  };
+
+  document.querySelectorAll('[data-ledger-view]').forEach(row => row.onclick = () => P._openLedgerDrawer(type,row.dataset.ledgerView));
+  document.querySelectorAll('[data-ledger-edit]').forEach(btn => btn.onclick = e => { e.stopPropagation(); P._openLedgerModal(type,btn.dataset.ledgerEdit); });
+  document.querySelectorAll('[data-ledger-delete]').forEach(btn => btn.onclick = e => { e.stopPropagation(); P._deleteLedgerRecord(type,btn.dataset.ledgerDelete); });
+  document.querySelectorAll('[data-ledger-page]').forEach(btn => btn.onclick = () => {
+    const v = btn.dataset.ledgerPage;
+    if(v === 'prev') page = Math.max(1,page-1);
+    else if(v === 'next') page = Math.min(totalPages,page+1);
+    else page = Number(v) || 1;
+    P._ledgerSetPage(type,page);
+    P.renderLedgers();
+  });
+
+  const selectPage = document.getElementById('ledger-select-page');
+  if(selectPage) {
+    selectPage.checked = pageItems.length > 0 && pageItems.every(record=>selected.has(record.id));
+    selectPage.onchange = e => {
+      e.stopPropagation();
+      if(selectPage.checked) pageItems.forEach(record=>selected.add(record.id));
+      else pageItems.forEach(record=>selected.delete(record.id));
+      P.renderLedgers();
+    };
+  }
+  document.querySelectorAll('.ledger-select-cb').forEach(cb => {
+    cb.onclick = e => e.stopPropagation();
+    cb.onchange = e => {
+      e.stopPropagation();
+      if(cb.checked) selected.add(cb.dataset.ledgerId); else selected.delete(cb.dataset.ledgerId);
+      P.renderLedgers();
+    };
+  });
+  const batchClear = document.getElementById('ledger-batch-clear');
+  if(batchClear) batchClear.onclick = () => { selected.clear(); P.renderLedgers(); };
+  const batchSelectFiltered = document.getElementById('ledger-batch-select-filtered');
+  if(batchSelectFiltered) batchSelectFiltered.onclick = () => { filtered.forEach(record=>selected.add(record.id)); P.renderLedgers(); };
+  const batchDelete = document.getElementById('ledger-batch-delete');
+  if(batchDelete) batchDelete.onclick = () => P._deleteLedgerBatch(type);
+  const batchEdit = document.getElementById('ledger-batch-edit');
+  if(batchEdit) batchEdit.onclick = () => P._openLedgerBatchEdit(type);
+};
+
+P.routes.ledgers = () => {
+  P._setHeader('运营台账', '用户、内容、社群与渠道数据统一记录');
+  P.renderLedgers();
 };
 
 })();
