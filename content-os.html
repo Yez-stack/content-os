@@ -178,6 +178,17 @@
   }
   #ledger-record-form select.cos-select { line-height:normal; }
   #ledger-record-form input[type="date"].cos-input { line-height:normal; }
+  /* 发布内容 / 编辑内容：输入框和下拉框保持同高 */
+  #publish-form .cos-input,
+  #publish-form .cos-select,
+  #cal-publish-form .cos-input,
+  #cal-publish-form .cos-select,
+  #content-edit-form .cos-input,
+  #content-edit-form .cos-select {
+    height:42px;
+    min-height:42px;
+    box-sizing:border-box;
+  }
   .cos-label { display:block; font-size:13px; font-weight:500; color:#475569; margin-bottom:4px; }
   .cos-btn { display:inline-flex; align-items:center; gap:6px; padding:8px 16px; border-radius:8px; font-size:14px; font-weight:500; cursor:pointer; transition:all 0.15s; border:none; outline:none; }
   .cos-btn-primary { background:#2563eb; color:#fff; }
@@ -348,8 +359,24 @@
 </style>
 <!-- Tailwind CDN 必须在 XLSX 之前加载，XLSX 用 defer 避免阻塞渲染 -->
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js" defer></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" defer></script>
+<script>
+// SheetJS 只影响导入导出；主地址不可用时尝试备用地址。
+window.addEventListener('DOMContentLoaded', function(){
+  if(window.XLSX) return;
+  var sc=document.createElement('script');
+  sc.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  sc.defer=true;
+  document.head.appendChild(sc);
+});
+</script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// Supabase 主 CDN 加载失败时自动切换备用 CDN，避免页面空白。
+if(!window.supabase){
+  document.write('<script src="https://unpkg.com/@supabase/supabase-js@2"><\/script>');
+}
+</script>
 <script>
 // 生产环境默认关闭调试日志，避免在 Console 输出业务数据；需要排查时可临时设为 true。
 window.CONTENT_OS_DEBUG = false;
@@ -386,6 +413,18 @@ const contentOsSupabaseFetch = async (input, init = {}) => {
   if (!proxyable) return fetch(request);
 
   const directFallbackRequest = request.clone();
+
+  // 双击本地 HTML 打开时没有站点域名，不能请求 /api/supabase-proxy。
+  // 此时直接访问 Supabase，确保本地文件也能正常进入登录页。
+  if(window.location.protocol === 'file:') {
+    window.CONTENT_OS_PROXY_STATE = {
+      mode: 'direct-local-file',
+      lastUsedAt: new Date().toISOString(),
+      lastError: ''
+    };
+    return fetch(directFallbackRequest);
+  }
+
   const proxyUrl = new URL(CONTENT_OS_PROXY_ENDPOINT, window.location.origin);
   proxyUrl.searchParams.set('path', targetUrl.pathname + targetUrl.search);
 
@@ -431,7 +470,14 @@ const contentOsSupabaseFetch = async (input, init = {}) => {
   }
 };
 
-const SUPABASE = supabase.createClient(
+if(!window.supabase || typeof window.supabase.createClient !== 'function') {
+  document.addEventListener('DOMContentLoaded', () => {
+    document.body.innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;padding:24px"><div style="width:420px;max-width:100%;background:white;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 12px 36px rgba(15,23,42,.08)"><div style="font-size:36px;margin-bottom:12px">⚠️</div><h2 style="font-size:18px;color:#111827;margin:0 0 10px">网页资源加载失败</h2><p style="font-size:14px;line-height:1.8;color:#6b7280;margin:0">Supabase 登录组件没有加载成功。请检查网络或 VPN 后重新打开页面。</p><button onclick="location.reload()" style="margin-top:20px;border:0;border-radius:10px;background:#2563eb;color:white;padding:10px 18px;cursor:pointer">重新加载</button></div></div>';
+  }, {once:true});
+  throw new Error('Supabase SDK 加载失败');
+}
+
+const SUPABASE = window.supabase.createClient(
   CONTENT_OS_SUPABASE_URL,
   CONTENT_OS_SUPABASE_KEY,
   {
@@ -680,20 +726,17 @@ C.NAV_GROUPS = [
       { id:'topics',       icon:'📋', label:'选题库',     route:'topics' },
       { id:'calendar',     icon:'📅', label:'内容日历',   route:'calendar' },
       { id:'contents',     icon:'📝', label:'内容库',     route:'contents' },
-      { id:'channels',     icon:'📣', label:'渠道分发',   route:'channels' },
     ]
   },
   {
     label:'数据与用户',
     items: [
       { id:'analytics',    icon:'📊', label:'数据分析',   route:'analytics' },
-      { id:'users',        icon:'👥', label:'内测用户',   route:'users' },
     ]
   },
   {
     label:'系统能力',
     items: [
-      { id:'knowledge',    icon:'🧠', label:'知识库',     route:'knowledge' },
       { id:'loginManage',  icon:'🔐', label:'登录管理',   route:'loginManage', adminOnly:true },
       { id:'settings',     icon:'⚙️', label:'系统设置',   route:'settings' },
     ]
@@ -733,6 +776,7 @@ C.DEFAULT_HOOKS    = ['反常识','对比型','热点型','悬念型','情绪共
 C.DEFAULT_GOALS    = ['下载','涨粉','曝光','品牌','转化'];
 C.DEFAULT_PLATFORMS = ['小红书','抖音','视频号','公众号','B站'];
 C.DEFAULT_CHANNELS  = ['QQ自驾游频道','QQ群','微信群','小红书评论区','抖音评论区','公众号','其他'];
+C.DEFAULT_SOURCE_CHANNELS = ['小红书','小红书投流','抖音','社群','自然注册','渠道合作','其他'];
 
 // --- 筛选字段 ---
 C.FILTER_FIELDS = ['platform','theme','format','hook','goal','tags','rating'];
@@ -986,6 +1030,7 @@ S.emptyDB = () => ({
     goals: [...C.DEFAULT_GOALS],
     platforms: [...C.DEFAULT_PLATFORMS],
     channels: [...C.DEFAULT_CHANNELS],
+    sourceChannels: [...C.DEFAULT_SOURCE_CHANNELS],
   }
 });
 
@@ -1501,9 +1546,13 @@ S._migrate = () => {
     if(!('recordDays' in c.metrics)) c.metrics.recordDays=[];
     if(!('dataUpdatedAt' in c.metrics)) c.metrics.dataUpdatedAt=null;
   });
-  // 确保 review 字段
+  // 确保 review 字段，并补齐内容运营复盘字段
   if(S.db.contents) S.db.contents.forEach(c=>{
-    if(!c.review) c.review={why:'',result:'',successReasons:'',failureReasons:'',optimization:''};
+    if(!c.review || typeof c.review !== 'object' || Array.isArray(c.review)) c.review={why:'',result:'',successReasons:'',failureReasons:'',optimization:''};
+    if(!('contentType' in c.review)) c.review.contentType='';
+    if(!('privateInquiries' in c.review)) c.review.privateInquiries=0;
+    if(!('groupJoins' in c.review)) c.review.groupJoins=0;
+    if(!('contentReview' in c.review)) c.review.contentReview='';
   });
   // 确保每个 content 有 publishDate（从 createdAt 推导，若为 ISO 则取日期部分）
   if(S.db.contents) S.db.contents.forEach(c=>{
@@ -1849,12 +1898,14 @@ S.config = {
   getGoals:     () => S.db.config.goals,
   getPlatforms: () => S.db.config.platforms,
   getChannels:  () => S.db.config.channels,
+  getSourceChannels: () => S.db.config.sourceChannels || [...C.DEFAULT_SOURCE_CHANNELS],
   setThemes:    async (arr) => { S.db.config.themes=arr; await SUPABASE.from('config').upsert({key:'themes',value:arr}); },
   setFormats:   async (arr) => { S.db.config.formats=arr; await SUPABASE.from('config').upsert({key:'formats',value:arr}); },
   setHooks:     async (arr) => { S.db.config.hooks=arr; await SUPABASE.from('config').upsert({key:'hooks',value:arr}); },
   setGoals:     async (arr) => { S.db.config.goals=arr; await SUPABASE.from('config').upsert({key:'goals',value:arr}); },
   setPlatforms: async (arr) => { S.db.config.platforms=arr; await SUPABASE.from('config').upsert({key:'platforms',value:arr}); },
   setChannels:  async (arr) => { S.db.config.channels=arr; await SUPABASE.from('config').upsert({key:'channels',value:arr}); },
+  setSourceChannels: async (arr) => { S.db.config.sourceChannels=arr; await SUPABASE.from('config').upsert({key:'sourceChannels',value:arr}); },
 };
 
 // --- 发布选题 → 内容 ---
@@ -1873,7 +1924,7 @@ S.publishTopic = async (topicId, publishData) => {
     contentLink: publishData.contentLink||null,
     bodyText: publishData.bodyText||'',
     publishScreenshot: publishData.publishScreenshot||null,
-    theme: topic.theme,
+    theme: publishData.theme || topic.theme || '',
     format: topic.format,
     hook: topic.hook,
     goal: topic.goal,
@@ -1885,7 +1936,7 @@ S.publishTopic = async (topicId, publishData) => {
       downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'', publisherId: publishData.publisherId||'', publisherName: publishData.publisherName||'', publisherEmail: publishData.publisherEmail||''
     } : { exposure:0, likes:0, comments:0, favorites:0, shares:0, downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'', publisherId: publishData.publisherId||'', publisherName: publishData.publisherName||'', publisherEmail: publishData.publisherEmail||'' },
     rating: null,
-    review: { why:'', result:'', successReasons:'', failureReasons:'', optimization:'' },
+    review: { why:'', result:'', successReasons:'', failureReasons:'', optimization:'', contentType: publishData.theme || topic.theme || '', privateInquiries:0, groupJoins:0, contentReview:'' },
     sourcePlatform: topic.sourcePlatform||'manual',
     sourceUrl: topic.sourceUrl||'',
     createdAt: H.nowISO(),
@@ -1963,7 +2014,7 @@ S.importJSON = async (jsonStr) => {
       }
     }
     if(data.config) {
-      for(const ck of ['themes','formats','hooks','goals','platforms','channels']) {
+      for(const ck of ['themes','formats','hooks','goals','platforms','channels','sourceChannels']) {
         if(data.config[ck]) {
           const merged = [...new Set([...(S.db.config[ck]||[]), ...data.config[ck]])];
           const setter = 'set' + ck.charAt(0).toUpperCase() + ck.slice(1);
@@ -1996,34 +2047,198 @@ S.importJSONOverwrite = (jsonStr) => {
   }
 };
 
-// --- CSV 导出（仅内容库） ---
-S.exportCSV = () => {
-  const contents = S.contents.all();
-  if(contents.length===0) return;
-  const headers = ['标题','平台','发布账号','发布人','发布时间','链接','主题','形式','钩子','目标','标签','评分','曝光','点赞','评论','收藏','分享','下载','涨粉','投流金额','实际耗时(分)'];
-  const rows = contents.map(c=>[
-    c.title, c.platform, window.P?._contentAccountLabel ? window.P._contentAccountLabel(c) : '', window.P?._publisherLabel ? window.P._publisherLabel(window.P._contentPublisherInfo(c)) : '', c.publishDate, c.contentLink||'',
-    c.theme, c.format, c.hook, c.goal,
-    (c.tags||[]).join('/'), c.rating||'',
-    c.metrics?.exposure||0, c.metrics?.likes||0, c.metrics?.comments||0,
-    c.metrics?.favorites||0, c.metrics?.shares||0, c.metrics?.downloads||0,
-    c.metrics?.followerGrowth||0, c.metrics?.adCost||0,
-    c.productionCostMinutes||0
-  ]);
-  const csvCell = (v) => {
-    let value = v == null ? '' : String(v);
-    // 防止 Excel / WPS 将外部文本识别为公式；数字类型保持原样。
-    if(typeof v === 'string' && /^[=+\-@]/.test(value.trimStart())) value = "'" + value;
-    return '"' + value.replace(/"/g,'""') + '"';
-  };
-  const csv = [headers.join(','), ...rows.map(r=>r.map(csvCell).join(','))].join('\n');
-  const BOM = '\uFEFF';
-  const blob = new Blob([BOM+csv], {type:'text/csv;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href=url; a.download='content-os-contents-'+H.today()+'.csv';
-  a.click(); URL.revokeObjectURL(url);
+// --- 通用文件保存：优先调用系统“另存为”，不支持时自动下载并保留手动下载入口 ---
+S._exportObjectUrl = '';
+S._exportObjectUrlTimer = null;
+
+S._cleanupExportObjectUrl = () => {
+  if(S._exportObjectUrlTimer) {
+    clearTimeout(S._exportObjectUrlTimer);
+    S._exportObjectUrlTimer = null;
+  }
+  if(S._exportObjectUrl) {
+    try { URL.revokeObjectURL(S._exportObjectUrl); } catch(_) {}
+    S._exportObjectUrl = '';
+  }
 };
+
+S._triggerObjectUrlDownload = (url, filename) => {
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  a.style.position = 'fixed';
+  a.style.left = '-9999px';
+  a.style.top = '-9999px';
+  document.body.appendChild(a);
+  a.click();
+  window.setTimeout(() => {
+    try { a.remove(); } catch(_) {}
+  }, 500);
+};
+
+S._showExportDownloadPanel = (url, filename) => {
+  const old = document.getElementById('cos-export-download-panel');
+  if(old) old.remove();
+
+  const panel = document.createElement('div');
+  panel.id = 'cos-export-download-panel';
+  panel.style.cssText = [
+    'position:fixed','right:24px','bottom:24px','z-index:99999','width:360px',
+    'background:#fff','border:1px solid #dbeafe','border-radius:14px',
+    'box-shadow:0 16px 40px rgba(15,23,42,.18)','padding:16px'
+  ].join(';');
+  panel.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:10px">
+      <div style="width:34px;height:34px;border-radius:10px;background:#eff6ff;display:flex;align-items:center;justify-content:center;font-size:18px;flex:none">📄</div>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:14px;font-weight:600;color:#0f172a">导出文件已生成</div>
+        <div style="margin-top:4px;font-size:12px;color:#64748b;word-break:break-all">${H.esc(filename)}</div>
+        <div style="margin-top:5px;font-size:12px;color:#ef4444">没有自动下载时，请点击“再次下载”。</div>
+      </div>
+      <button type="button" data-export-close style="border:0;background:transparent;color:#94a3b8;font-size:18px;line-height:1;cursor:pointer">×</button>
+    </div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
+      <button type="button" data-export-open class="cos-btn cos-btn-secondary cos-btn-sm">打开文件</button>
+      <button type="button" data-export-again class="cos-btn cos-btn-primary cos-btn-sm">再次下载</button>
+    </div>`;
+  document.body.appendChild(panel);
+
+  const close = () => {
+    try { panel.remove(); } catch(_) {}
+  };
+  panel.querySelector('[data-export-close]').onclick = close;
+  panel.querySelector('[data-export-again]').onclick = () => {
+    S._triggerObjectUrlDownload(url, filename);
+    try { UI.toast('已重新触发下载，请查看浏览器下载记录','success'); } catch(_) {}
+  };
+  panel.querySelector('[data-export-open]').onclick = () => {
+    const opened = window.open(url, '_blank', 'noopener');
+    if(!opened) {
+      try { UI.toast('浏览器拦截了新窗口，请允许弹窗后重试','error'); } catch(_) {}
+    }
+  };
+};
+
+S._saveExportBlob = async (blob, filename) => {
+  if(!(blob instanceof Blob) || blob.size <= 0) throw new Error('导出文件生成失败');
+
+  // Chrome / Edge 在 HTTPS 部署环境中可直接弹出系统“另存为”，保存结果最可靠。
+  if(window.isSecureContext && typeof window.showSaveFilePicker === 'function') {
+    try {
+      const ext = String(filename).split('.').pop().toLowerCase();
+      const mime = ext === 'xlsx'
+        ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        : 'text/csv';
+      const accept = ext === 'xlsx'
+        ? {'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}
+        : {'text/csv':['.csv']};
+      const handle = await window.showSaveFilePicker({
+        suggestedName: filename,
+        types: [{description: ext === 'xlsx' ? 'Excel 工作簿' : 'CSV 表格', accept}]
+      });
+      const writable = await handle.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return {method:'file-picker', filename, mime};
+    } catch(error) {
+      if(error && error.name === 'AbortError') return {method:'cancelled', filename};
+      console.warn('系统另存为不可用，切换为浏览器下载：', error);
+    }
+  }
+
+  // Safari、普通本地 HTML 或受限环境：使用 Blob 下载，并提供持续可点击的备用入口。
+  S._cleanupExportObjectUrl();
+  const url = URL.createObjectURL(blob);
+  S._exportObjectUrl = url;
+  S._triggerObjectUrlDownload(url, filename);
+  S._showExportDownloadPanel(url, filename);
+  S._exportObjectUrlTimer = window.setTimeout(() => {
+    S._cleanupExportObjectUrl();
+    const panel = document.getElementById('cos-export-download-panel');
+    if(panel) panel.remove();
+  }, 10 * 60 * 1000);
+  return {method:'browser-download', filename};
+};
+
+// --- 内容库导出：按运营复盘字段生成 Excel（优先导出当前筛选结果） ---
+S.exportContentData = async () => {
+  try {
+    const source = (window.P && Array.isArray(P._contentCurrentFiltered))
+      ? P._contentCurrentFiltered
+      : S.contents.all();
+    const contents = [...source];
+    if(contents.length===0) {
+      try { UI.toast('暂无可导出的内容数据','error'); } catch(_) {}
+      return;
+    }
+
+    const headers = ['发布日期','平台','内容标题','内容类型','曝光量','点赞数','收藏数','分享数','评论数','私信咨询量','引流进群人数','内容优劣复盘'];
+    const rows = contents.map(c => {
+      const review = (window.P && typeof P._contentOperationReview === 'function')
+        ? P._contentOperationReview(c)
+        : ((c.review && typeof c.review === 'object') ? c.review : {});
+      return [
+        c.publishDate || '',
+        c.platform || '',
+        c.title || '',
+        c.theme || review.contentType || '',
+        Number(c.metrics?.exposure || 0),
+        Number(c.metrics?.likes || 0),
+        Number(c.metrics?.favorites || 0),
+        Number(c.metrics?.shares || 0),
+        Number(c.metrics?.comments || 0),
+        Number(review.privateInquiries || 0),
+        Number(review.groupJoins || 0),
+        review.contentReview || ''
+      ];
+    });
+
+    const dateSuffix = (typeof H?.today === 'function' ? H.today() : new Date().toISOString().slice(0,10));
+    let filename = '';
+    let blob = null;
+
+    if(typeof XLSX !== 'undefined' && XLSX?.utils && typeof XLSX.write === 'function') {
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+      ws['!cols'] = [
+        {wch:12},{wch:12},{wch:34},{wch:16},{wch:12},{wch:12},
+        {wch:12},{wch:12},{wch:12},{wch:14},{wch:16},{wch:44}
+      ];
+      ws['!autofilter'] = {ref:`A1:L${rows.length+1}`};
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '内容库数据');
+      const excelBytes = XLSX.write(wb, {bookType:'xlsx', type:'array'});
+      filename = `内容库数据_${dateSuffix}.xlsx`;
+      blob = new Blob([excelBytes], {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    } else {
+      const csvCell = (v) => {
+        let value = v == null ? '' : String(v);
+        if(typeof v === 'string' && /^[=+\-@]/.test(value.trimStart())) value = "'" + value;
+        return '"' + value.replace(/"/g,'""') + '"';
+      };
+      const csv = [headers, ...rows].map(r=>r.map(csvCell).join(',')).join('\r\n');
+      filename = `内容库数据_${dateSuffix}.csv`;
+      blob = new Blob(['\uFEFF'+csv], {type:'text/csv;charset=utf-8'});
+    }
+
+    const result = await S._saveExportBlob(blob, filename);
+    if(result?.method === 'cancelled') {
+      try { UI.toast('已取消导出'); } catch(_) {}
+      return;
+    }
+    if(result?.method === 'file-picker') {
+      try { UI.toast(`已保存 ${filename}（${contents.length} 条）`,'success'); } catch(_) {}
+    } else {
+      try { UI.toast('文件已生成；若未自动下载，请点击右下角“再次下载”','success'); } catch(_) {}
+    }
+  } catch(error) {
+    console.error('内容库导出失败:', error);
+    try { UI.toast(`导出失败：${error?.message || '请检查浏览器下载权限'}`,'error'); } catch(_) {}
+  }
+};
+
+// 兼容系统设置中原有的“内容库 CSV”入口。
+S.exportCSV = S.exportContentData;
 
 })();
 </script>
@@ -2329,7 +2544,7 @@ UI.dataLoading = {
     }
   },
 
-  finish(message='数据加载完成', detail='内容库、内容日历和渠道分发已同步') {
+  finish(message='数据加载完成', detail='内容库、内容日历和分发记录已同步') {
     clearTimeout(this._slowTimer);
     const el = this._els();
     if(!el.overlay) return;
@@ -2595,7 +2810,7 @@ P._topicActions = (t) => {
   return btns;
 };
 
-// 构建选题卡片 HTML（精简：仅标题/日期/目标/状态/优先级，策略字段移入Drawer）
+// 构建选题卡片 HTML（精简：仅标题/日期/目标/状态，其他信息移入详情）
 P._topicSourceBadge = (t) => {
   if(t?.sourcePlatform === 'hotspot' || String(t?.notes || '').includes('来源：热点中心') || (t?.tags||[]).includes('热点')) {
     return `<span class="cos-tag text-xs text-orange-600 border-orange-200 bg-orange-50">热点生成</span>`;
@@ -2620,7 +2835,6 @@ P._topicCard = (t) => `
       ${UI.statusBadge(t.status)}
       ${P._topicSourceBadge(t)}
       ${t.goal ? `<span class="cos-tag text-xs">${H.esc(t.goal)}</span>` : ''}
-      ${t.priority ? `<span class="cos-tag text-xs font-mono">${H.esc(t.priority)}</span>` : ''}
     </div>
     ${t.plannedDate ? `<div class="mt-1.5 text-xs text-gray-400">📅 ${H.showDate(t.plannedDate)}</div>` : ''}
   </div>`
@@ -3319,9 +3533,9 @@ P.renderHotspots = () => {
 
   const actionsEl = document.getElementById('page-actions');
   if(actionsEl) actionsEl.innerHTML = `
-    <button class="cos-btn cos-btn-primary cos-btn-sm" id="btn-hotspot-paste">📋 粘贴导入热点</button>
-    <button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-hotspot-manual">➕ 手动新增</button>
-    <button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-hotspot-import">📥 Excel/CSV导入</button>`;
+    <button class="cos-btn cos-btn-primary" id="btn-hotspot-paste">📋 粘贴导入热点</button>
+    <button class="cos-btn cos-btn-secondary" id="btn-hotspot-manual">➕ 手动新增</button>
+    <button class="cos-btn cos-btn-secondary" id="btn-hotspot-import">📥 Excel/CSV导入</button>`;
 
   let html = `<div class="space-y-4">
     <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
@@ -4028,7 +4242,7 @@ P._openHotspotConfigModal = async () => {
     };
   }, 50);
   const result = await p;
-  if(!result || result === 'cancel') return;
+  if(!result || result === 'cancel') return null;
   P._hotspotSaveConfig({
     douyinUrl: (result.douyinUrl || '').trim(),
     xhsUrl: (result.xhsUrl || '').trim(),
@@ -4198,7 +4412,7 @@ P.renderInspirations = () => {
 
   // header actions
   const actionsEl = document.getElementById('page-actions');
-  actionsEl.innerHTML = `<button class="cos-btn cos-btn-primary cos-btn-sm" data-add-inspiration>+ 新增灵感</button>`;
+  actionsEl.innerHTML = `<button class="cos-btn cos-btn-primary" data-add-inspiration>+ 新增灵感</button>`;
 
   let html = '<div class="space-y-4">';
 
@@ -4247,20 +4461,27 @@ P.renderInspirations = () => {
   document.querySelectorAll('[data-click-insp]').forEach(b=>b.onclick=()=>P._openInspDrawer(b.dataset.clickInsp));
   document.querySelectorAll('[data-insp-to-topic]').forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation();
-    const confirmed = await UI.confirm('转为选题','将灵感转为正式选题？');
-    if(confirmed) {
-      const topic = await S.inspirationToTopic(b.dataset.inspToTopic);
-      if(topic) {
-        // 自定义 toast：带跳转链接
-        const toastEl = document.createElement('div');
-        toastEl.className = 'pointer-events-auto flex items-center gap-2 px-4 py-3 rounded-lg border shadow-sm text-sm font-medium toast-enter bg-green-50 text-green-800 border-green-200';
-        toastEl.innerHTML = `✅ 已生成选题 <span class="text-green-600 font-medium cursor-pointer underline" data-toast-goto="${topic.id}">查看选题</span>`;
-        document.getElementById('toast-container').appendChild(toastEl);
-        toastEl.querySelector('[data-toast-goto]').onclick = () => { R.navigate('topics'); setTimeout(()=>P._openTopicDrawer(topic.id), 200); };
-        setTimeout(()=>{toastEl.style.opacity='0';toastEl.style.transition='opacity 0.3s';setTimeout(()=>toastEl.remove(),300);},4000);
-        P.renderInspirations();
+    const insp = S.inspirations.get(b.dataset.inspToTopic);
+    if(!insp || insp.status==='converted') return;
+    await P._openTopicModal(
+      null,
+      S.config.getThemes(),
+      S.config.getFormats(),
+      S.config.getHooks(),
+      S.config.getGoals(),
+      {
+        title: insp.title||'',
+        coreContent: insp.description||insp.content||'',
+        tags: [...(insp.tags||[])],
+        goal: '',
+        theme: '',
+        format: '',
+        plannedDate: '',
+        notes: insp.source ? '来源：'+insp.source : '',
+        sourceInspirationId: insp.id
       }
-    }
+    );
+    P.renderInspirations();
   });
   document.querySelectorAll('[data-delete-insp]').forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation();
@@ -4317,7 +4538,7 @@ P.renderTopics = (containerId) => {
 
   // header actions
   const actionsEl = document.getElementById('page-actions');
-  actionsEl.innerHTML = `<button class="cos-btn cos-btn-primary cos-btn-sm" data-add-topic>+ 新增选题</button> <button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-link-parse">🔗 链接解析</button>`;
+  actionsEl.innerHTML = `<button class="cos-btn cos-btn-primary" data-add-topic>+ 新增选题</button> <button class="cos-btn cos-btn-secondary" id="btn-link-parse">🔗 链接解析</button>`;
 
   let html = '';
 
@@ -4364,13 +4585,14 @@ P.renderTopics = (containerId) => {
     html += `<div class="cos-card p-4" style="border-radius:14px; box-shadow:0 1px 3px rgba(0,0,0,0.04);">`;
     html += `<div class="overflow-x-auto"><table class="cos-table">
       <thead><tr>
-        <th style="min-width:200px">标题</th><th>状态</th><th>目标</th><th>优先级</th><th>计划日期</th><th>创建时间</th><th style="width:120px">操作</th>
+        <th style="min-width:200px">标题</th><th>状态</th><th>目标</th><th>内容类型</th><th>形式</th><th>计划日期</th><th>创建时间</th><th style="width:120px">操作</th>
       </tr></thead><tbody>
       ${pageItems.map(t=>`<tr>
         <td class="cos-td-title"><div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900" data-click-topic="${t.id}">${H.esc(H.truncate(t.title,20))}</span><span class="title-tooltip-text">${H.esc(t.title)}</span></div><div class="mt-1 text-xs">${P._topicSourceBadge(t)}</div></td>
         <td>${UI.statusBadge(t.status)}</td>
         <td><span class="cos-tag text-xs">${H.esc(t.goal||'-')}</span></td>
-        <td><span class="cos-tag text-xs font-mono">${H.esc(t.priority||'-')}</span></td>
+        <td class="text-xs text-gray-600">${H.esc(t.theme||'-')}</td>
+        <td class="text-xs text-gray-600">${H.esc(t.format||'-')}</td>
         <td class="text-xs text-gray-500">${H.showDate(t.plannedDate)}</td>
         <td class="text-xs text-gray-400">${H.fmtDateTime(t.createdAt)}</td>
         <td><div class="flex gap-0.5">${P._topicActions(t)}</div></td>
@@ -4452,7 +4674,7 @@ P._openLinkParseModal = async (themes, formats, hooks, goals) => {
           <div>${UI.renderField('优先级','priority','select','P2',C.PRIORITIES)}</div>
         </div>
         <div class="grid grid-cols-2 gap-4">
-          <div>${UI.renderField('主题','theme','select','',themes,'选择主题')}</div>
+          <div>${UI.renderField('内容类型','theme','select','',themes,'选择内容类型')}</div>
           <div>${UI.renderField('形式','format','select','',formats,'选择形式')}</div>
         </div>
         <div>${UI.renderField('核心内容','coreContent','textarea','','','解析后的核心内容（可编辑）')}</div>
@@ -4629,34 +4851,25 @@ P._fetchAndParseLink = async (url) => {
 
 // ==================== 选题 Modal ====================
 
-P._openTopicModal = async (topicId, themes, formats, hooks, goals) => {
+P._openTopicModal = async (topicId, themes, formats, hooks, goals, prefill = null) => {
   const isEdit = !!topicId;
-  const topic = isEdit ? S.topics.get(topicId) : {};
-  const platforms = S.config.getPlatforms();
+  const topic = isEdit ? (S.topics.get(topicId) || {}) : (prefill || {});
   const html = `
     <div class="p-6">
       <h2 class="text-base font-semibold text-gray-900 mb-5">${isEdit?'编辑选题':'新增选题'}</h2>
+      ${topic.sourceInspirationId ? '<div class="mb-4 px-3 py-2 rounded-lg bg-blue-50 text-blue-700 text-xs">💡 已自动带入灵感内容，请补充选题信息后保存</div>' : ''}
       <form id="topic-form" class="space-y-4">
         <div>${UI.renderField('标题 *','title','text',topic.title||'',null,'输入选题标题')}</div>
         <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('目标','goal','select',topic.goal||'',goals,'选择目标')}</div>
-          <div>${UI.renderField('优先级','priority','select',topic.priority||'P2',C.PRIORITIES)}</div>
+          <div>${UI.renderField('内容类型','theme','select',topic.theme||'',themes,'选择内容类型')}</div>
         </div>
         <div class="grid grid-cols-2 gap-4">
-          <div>${UI.renderField('主题','theme','select',topic.theme||'',themes,'选择主题')}</div>
           <div>${UI.renderField('形式','format','select',topic.format||'',formats,'选择形式')}</div>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
-          <div>${UI.renderField('钩子','hook','select',topic.hook||'',hooks,'选择钩子')}</div>
-          <div>${UI.renderField('预估工作量','estimatedWorkload','select',topic.estimatedWorkload||'1h',C.WORKLOADS.map(w=>`${w}`),null)}</div>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('计划发布时间','plannedDate','date',topic.plannedDate||'')}</div>
-          <div><label class="cos-label">状态</label><select class="cos-select" name="status">${C.TOPIC_STATUSES.map(s=>`<option value="${s}" ${(topic.status||'todo')===s?'selected':''}>${C.TOPIC_STATUS_LABEL[s]}</option>`).join('')}</select></div>
         </div>
         <div>${UI.renderField('标签','tags_str','text',(topic.tags||[]).join(', '),null,'逗号分隔')}</div>
         <div>${UI.renderField('核心内容','coreContent','textarea',topic.coreContent||'',null,'描述选题的核心内容')}</div>
-        <div>${UI.renderField('备注','notes','textarea',topic.notes||'',null,'其他备注')}</div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
           <button type="button" class="cos-btn cos-btn-primary" id="topic-save-btn">保存</button>
@@ -4707,15 +4920,16 @@ P._openTopicModal = async (topicId, themes, formats, hooks, goals) => {
       title: data.title,
       coreContent: data.coreContent||'',
       goal: data.goal||'',
-      priority: data.priority||'P2',
+      priority: 'P2',
       theme: data.theme||'',
       format: data.format||'',
-      hook: data.hook||'',
+      hook: '',
       tags,
       plannedDate: data.plannedDate||null,
-      estimatedWorkload: data.estimatedWorkload||'1h',
-      status: data.status||'todo',
-      notes: data.notes||'',
+      estimatedWorkload: '',
+      status: 'todo',
+      notes: topic.notes||'',
+      sourceInspirationId: topic.sourceInspirationId||null,
       createdAt: H.nowISO(),
       updatedAt: H.nowISO()
     };
@@ -4724,7 +4938,10 @@ P._openTopicModal = async (topicId, themes, formats, hooks, goals) => {
       const inserted = await S.topics.add(newItem);
       window.CONTENT_OS_DEBUG && console.log('🔍 [AFTER INSERT]', inserted);
       if(!inserted) { UI.toast('保存失败，请查看 Console','error'); return; }
-      UI.toast('选题已创建');
+      if(newItem.sourceInspirationId) {
+        await S.inspirations.update(newItem.sourceInspirationId, { status:'converted', convertedTopicId:newItem.id });
+      }
+      UI.toast(newItem.sourceInspirationId ? '灵感已转为选题' : '选题已创建');
     } catch(e) {
       console.error('❌ [SAVE INSERT ERROR]', e.message, e);
       UI.toast('保存异常: ' + e.message, 'error');
@@ -4750,23 +4967,14 @@ P._openTopicDrawer = (topicId) => {
       <div class="space-y-4">
         <div><span class="text-xs text-gray-400">标题</span><p class="text-sm font-medium text-gray-900 mt-1">${H.esc(t.title)}</p></div>
         ${sourceInsp?`<div class="cos-card p-3 bg-blue-50/50 border border-blue-100 rounded-lg"><span class="text-xs text-blue-600 font-medium">💡 来源灵感</span><p class="text-sm text-blue-800 mt-1 cursor-pointer hover:underline" data-goto-insp="${sourceInsp.id}">${H.esc(sourceInsp.title)}</p></div>`:''}
-        <div class="grid grid-cols-2 gap-4">
-          <div><span class="text-xs text-gray-400">状态</span><div class="mt-1">${UI.statusBadge(t.status)}</div></div>
-          <div><span class="text-xs text-gray-400">优先级</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.priority||'-')}</p></div>
-        </div>
+        <div><span class="text-xs text-gray-400">计划发布</span><p class="text-sm text-gray-700 mt-1">${H.showDate(t.plannedDate)}</p></div>
         <div class="grid grid-cols-3 gap-4">
           <div><span class="text-xs text-gray-400">目标</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.goal||'-')}</p></div>
-          <div><span class="text-xs text-gray-400">主题</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.theme||'-')}</p></div>
+          <div><span class="text-xs text-gray-400">内容类型</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.theme||'-')}</p></div>
           <div><span class="text-xs text-gray-400">形式</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.format||'-')}</p></div>
-        </div>
-        <div class="grid grid-cols-3 gap-4">
-          <div><span class="text-xs text-gray-400">钩子</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.hook||'-')}</p></div>
-          <div><span class="text-xs text-gray-400">预估工作量</span><p class="text-sm text-gray-700 mt-1">${C.WORKLOAD_LABEL[t.estimatedWorkload]||t.estimatedWorkload||'-'}</p></div>
-          <div><span class="text-xs text-gray-400">计划发布</span><p class="text-sm text-gray-700 mt-1">${H.showDate(t.plannedDate)}</p></div>
         </div>
         ${t.tags&&t.tags.length?`<div><span class="text-xs text-gray-400">标签</span><div class="flex flex-wrap gap-1 mt-1">${t.tags.map(tg=>`<span class="cos-tag">${H.esc(tg)}</span>`).join('')}</div></div>`:''}
         ${t.coreContent?`<div><span class="text-xs text-gray-400">核心内容</span><p class="text-sm text-gray-700 mt-1">${H.esc(t.coreContent)}</p></div>`:''}
-        ${t.notes?`<div><span class="text-xs text-gray-400">备注</span><p class="text-sm text-gray-500 mt-1">${H.esc(t.notes)}</p></div>`:''}
         <div class="text-xs text-gray-400 mt-4">创建：${H.fmtDateTime(t.createdAt)}</div>
       </div>
     </div>`;
@@ -4779,6 +4987,7 @@ P._openPublishModal = async (topicId) => {
   const t = S.topics.get(topicId);
   if(!t) return;
   const platforms = S.config.getPlatforms();
+  const contentTypes = S.config.getThemes();
   // 自动填充逻辑：来自链接解析的选题自动带出字段
   const isFromLink = t.sourcePlatform === 'xiaohongshu' || t.sourcePlatform === 'douyin';
   const PLATFORM_MAP = { xiaohongshu:'小红书', douyin:'抖音' };
@@ -4788,8 +4997,6 @@ P._openPublishModal = async (topicId) => {
   const autoCover = isFromLink ? (t.coverImage||'') : '';
   const autoTime = (()=>{ const d=new Date(); d.setMinutes(d.getMinutes()+10); return d.toTimeString().slice(0,5); })();
   const defaultPublisher = P._currentPublisherInfo();
-  const publisherCandidates = await P._loadPublisherCandidates([defaultPublisher]);
-  const publisherField = P._publisherFieldHtml(publisherCandidates, defaultPublisher, {allowEmpty:false});
   // 平台 select 预填
   const platformOpts = platforms.map(p=>'<option value="'+H.esc(p)+'" '+(autoPlatform===p?'selected':'')+'>'+H.esc(p)+'</option>').join('');
   const html = `
@@ -4797,21 +5004,22 @@ P._openPublishModal = async (topicId) => {
       <h2 class="text-base font-semibold text-gray-900 mb-1">发布内容</h2>
       <p class="text-sm text-gray-500 mb-5">选题：${H.esc(t.title)}${isFromLink?'<span class="ml-2 inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs bg-blue-50 text-blue-600">🔗 链接解析</span>':''}</p>
       <form id="publish-form" class="space-y-4">
-        <div><label class="cos-label">发布平台 *</label><select class="cos-select" name="platform">${isFromLink?'':'<option value="">选择平台</option>'}${platformOpts}</select></div>
+        <div class="grid grid-cols-2 gap-4">
+          <div><label class="cos-label">发布平台 *</label><select class="cos-select" name="platform">${isFromLink?'':'<option value="">选择平台</option>'}${platformOpts}</select></div>
+          <div>${UI.renderField('内容类型 *','theme','select',t.theme||'',contentTypes,'选择内容类型')}</div>
+        </div>
         <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('发布日期','publishDate','date',H.today())}</div>
           <div>${UI.renderField('发布时间','publishTime','time',autoTime)}</div>
         </div>
-        <div class="grid grid-cols-3 gap-4">
-          <div>${publisherField}</div>
-          <div>${UI.renderField('发布账号','publishAccount','text','',null,'公司主体号 / 小号A')}</div>
+        <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('账号类型','accountType','select','主体账号',P._accountTypes,'选择账号类型')}</div>
+          <div>${UI.renderField('发布账号','publishAccount','text','',null,'公司主体号 / 小号A')}</div>
         </div>
         <div>${UI.renderField('内容链接','contentLink','url',autoLink,null,'https://...')}</div>
         <div>${UI.renderField('正文内容','bodyText','textarea',autoBody,null,'粘贴正文')}</div>
         <div>${UI.renderField('封面图','coverImage','image','')}</div>
         <div>${UI.renderField('发布截图','publishScreenshot','image','')}</div>
-        <div>${UI.renderField('实际制作耗时(分钟)','productionCostMinutes','number','',null,'如 45')}</div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
           <button type="button" class="cos-btn cos-btn-primary" id="publish-save-btn">${isFromLink?'🚀 一键发布':'确认发布'}</button>
@@ -4868,6 +5076,7 @@ P._openPublishModal = async (topicId) => {
         const form = document.getElementById('publish-form');
         const data = UI.readForm(form);
         if(!data.platform) { UI.toast('请选择发布平台','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
+        if(!data.theme) { UI.toast('请选择内容类型','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         UI.closeModal(data);
       } catch(e) {
         btn.disabled = false;
@@ -4879,9 +5088,9 @@ P._openPublishModal = async (topicId) => {
   const result = await modalPromise;
   if(!result||result==='cancel') return;
   const data = result;
-  const publisher = P._resolvePublisher(data.publisherKey, publisherCandidates, defaultPublisher);
-  Object.assign(data, P._publisherFields(publisher));
-  delete data.publisherKey;
+  // 发布人隐藏展示，但仍自动记录当前登录账号；内容类型默认继承选题，也允许发布前修正。
+  data.theme = data.theme || t.theme || '';
+  Object.assign(data, P._publisherFields(defaultPublisher));
   await S.publishTopic(topicId, data);
   UI.toast('发布成功！内容已加入内容库');
   P.renderTopics();
@@ -5299,7 +5508,7 @@ P._renderTrendChart = (history, key, contentId) => {
     return `<div class="h-72 rounded-2xl bg-gray-50 border border-dashed border-gray-200 flex flex-col items-center justify-center text-center">
       <div class="text-3xl mb-2">📈</div>
       <div class="text-sm font-medium text-gray-700">暂无增长趋势</div>
-      <div class="text-xs text-gray-400 mt-1">导入小红书数据 2 次以上后，就能看到这篇内容的走势。</div>
+      <div class="text-xs text-gray-400 mt-1">导入数据 2 次以上后，就能看到这篇内容的走势。</div>
     </div>`;
   }
   const values = history.map(s => P._metricNumber(s[key]));
@@ -5530,7 +5739,7 @@ P._activeFilterTags = (F) => {
   (F.account||[]).forEach(v=>tags.push({group:'账号',label:v,key:'account',val:v}));
   (F.publisher||[]).forEach(v=>tags.push({group:'发布人',label:P._publisherFilterLabel(v),key:'publisher',val:v}));
   (F.accountType||[]).forEach(v=>tags.push({group:'账号类型',label:v,key:'accountType',val:v}));
-  F.theme.forEach(v=>tags.push({group:'主题',label:v,key:'theme',val:v}));
+  F.theme.forEach(v=>tags.push({group:'内容类型',label:v,key:'theme',val:v}));
   F.format.forEach(v=>tags.push({group:'形式',label:v,key:'format',val:v}));
   F.hook.forEach(v=>tags.push({group:'钩子',label:v,key:'hook',val:v}));
   F.goal.forEach(v=>tags.push({group:'目标',label:v,key:'goal',val:v}));
@@ -5624,7 +5833,7 @@ P.renderContents = (containerId) => {
   }
 
   // ====== 排序（默认 publishDate 永远 DESC） ======
-  const validSortKeys = ['publishDate','exposure','likes','comments','shares','favorites','downloads','followerGrowth','adCost','rating'];
+  const validSortKeys = ['publishDate','exposure','likes','comments','shares','favorites','followerGrowth','adCost','rating'];
   const sortBy = (F.sortBy && validSortKeys.includes(F.sortBy)) ? F.sortBy : 'publishDate';
   // publishDate 永远降序；其他字段尊重用户选择
   const desc = (sortBy === 'publishDate') ? true : (F.sortDesc !== false);
@@ -5636,7 +5845,7 @@ P.renderContents = (containerId) => {
   }else if(sortBy==='adCost'){
     filtered=[...filtered].sort((a,b)=>(a.metrics?.adCost||0)-(b.metrics?.adCost||0));
     if(desc) filtered.reverse();
-  }else if(['exposure','likes','comments','favorites','shares','downloads','followerGrowth'].includes(sortBy)){
+  }else if(['exposure','likes','comments','favorites','shares','followerGrowth'].includes(sortBy)){
     filtered=[...filtered].sort((a,b)=>(a.metrics?.[sortBy]||0)-(b.metrics?.[sortBy]||0));
     if(desc) filtered.reverse();
   }else{
@@ -5725,7 +5934,7 @@ P.renderContents = (containerId) => {
   html += `<button class="filter-chip ml-auto" id="content-filter-clear">重置筛选</button>`;
   html += `</div>`;
   html += P._renderFilterGroup('账号类型','accountType',accountTypes,F.accountType);
-  html += P._renderFilterGroup('主题','theme',themes,F.theme);
+  html += P._renderFilterGroup('内容类型','theme',themes,F.theme);
   html += P._renderFilterGroup('形式','format',formats,F.format);
   html += P._renderFilterGroup('钩子','hook',hooks,F.hook);
   html += P._renderFilterGroup('目标','goal',goals,F.goal);
@@ -5757,7 +5966,6 @@ P.renderContents = (containerId) => {
         <td>${(()=>{const img=H.getCoverImage(c);return img?`<img src="${img}" class="img-thumb" loading="lazy">`:'<div class="w-10 h-10 rounded-md bg-gray-100 flex items-center justify-center text-gray-400 text-xs">暂无</div>';})()}</td>
         <td class="cos-td-title">
           <div class="title-tooltip"><span class="title-text text-sm font-medium text-gray-900" data-view-content="${c.id}">${H.esc(H.truncate(c.title,20))}</span></div>
-          <div class="mt-1">${P._contentDistributionBadge(c.id)}</div>
         </td>
         <td class="content-platform-cell">
           <div class="flex flex-col items-start gap-1">
@@ -5972,10 +6180,36 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
 
 // ==================== 内容详情 Drawer ====================
 
+// 内容运营补充数据统一存放在 content.review 中。
+// 若旧版“内容数据台账”已有同标题记录，则作为兼容回填来源，避免历史录入丢失。
+P._contentOperationReview = (c) => {
+  const review = (c?.review && typeof c.review === 'object' && !Array.isArray(c.review)) ? c.review : {};
+  let legacy = null;
+  try {
+    const raw = localStorage.getItem('content_os_operation_ledgers_v1');
+    const ledger = raw ? JSON.parse(raw) : null;
+    const rows = Array.isArray(ledger?.contentData) ? ledger.contentData : [];
+    legacy = rows
+      .filter(r => String(r?.contentTitle || '').trim() === String(c?.title || '').trim())
+      .filter(r => !r?.platform || !c?.platform || String(r.platform) === String(c.platform))
+      .sort((a,b) => String(b.updatedAt || b.createdAt || b.publishDate || '').localeCompare(String(a.updatedAt || a.createdAt || a.publishDate || '')))[0] || null;
+  } catch(_) {}
+  const toNum = v => Number.isFinite(Number(v)) ? Number(v) : 0;
+  const privateInquiries = toNum(review.privateInquiries);
+  const groupJoins = toNum(review.groupJoins);
+  return {
+    contentType: review.contentType || legacy?.contentType || '',
+    privateInquiries: privateInquiries || toNum(legacy?.privateInquiries),
+    groupJoins: groupJoins || toNum(legacy?.groupJoins),
+    contentReview: review.contentReview || legacy?.review || ''
+  };
+};
+
 P._openContentDrawer = (contentId) => {
   const c = S.contents.get(contentId);
   if(!c) return;
   const t = c.topicId ? S.topics.get(c.topicId) : null;
+  const operationReview = P._contentOperationReview(c);
   const html = `
     <div class="p-6">
       <div class="flex items-center justify-between mb-6">
@@ -5994,18 +6228,13 @@ P._openContentDrawer = (contentId) => {
         <div><span class="text-xs text-gray-400">内容链接</span><p class="text-sm mt-1">${c.contentLink ? `<a href="${H.esc(c.contentLink)}" target="_blank" class="text-blue-600 hover:underline break-all">打开链接</a>` : '<span class="text-gray-400">-</span>'}</p></div>
         ${c.bodyText?`<div><span class="text-xs text-gray-400">正文内容</span><p class="text-sm text-gray-700 mt-1 whitespace-pre-wrap bg-gray-50 p-3 rounded-lg max-h-60 overflow-y-auto">${H.esc(c.bodyText)}</p></div>`:''}
         <div class="grid grid-cols-3 gap-4">
-          <div><span class="text-xs text-gray-400">主题</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.theme||'-')}</p></div>
+          <div><span class="text-xs text-gray-400">内容类型</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.theme||'-')}</p></div>
           <div><span class="text-xs text-gray-400">形式</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.format||'-')}</p></div>
-          <div><span class="text-xs text-gray-400">钩子</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.hook||'-')}</p></div>
-        </div>
-        <div class="grid grid-cols-2 gap-4">
           <div><span class="text-xs text-gray-400">目标</span><p class="text-sm text-gray-700 mt-1">${H.esc(c.goal||'-')}</p></div>
-          <div><span class="text-xs text-gray-400">实际耗时</span><p class="text-sm text-gray-700 mt-1">${c.productionCostMinutes||0} 分钟</p></div>
         </div>
         ${c.tags&&c.tags.length?`<div><span class="text-xs text-gray-400">标签</span><div class="flex flex-wrap gap-1 mt-1">${c.tags.map(tg=>`<span class="cos-tag">${H.esc(tg)}</span>`).join('')}</div></div>`:''}
         ${(()=>{const img=H.getCoverImage(c);return img?`<div><span class="text-xs text-gray-400">封面图</span><div class="mt-1"><img src="${img}" class="img-preview"></div></div>`:'';})()}
         ${c.publishScreenshot && (c.publishScreenshot.startsWith('data:') || c.publishScreenshot.startsWith('http')) ? `<div><span class="text-xs text-gray-400">发布截图</span><div class="mt-1"><img src="${c.publishScreenshot}" class="img-preview"></div></div>`:''}
-        ${P._renderContentChannelSummary(c.id)}
         <div class="border-t pt-4 mt-4">
           <div class="flex items-center justify-between mb-3"><h3 class="text-sm font-semibold text-gray-700">📊 运营数据</h3><button class="cos-btn cos-btn-secondary cos-btn-xs" data-content-trend="${H.esc(c.id)}">📈 增长趋势</button></div>
           <div class="grid grid-cols-4 gap-3">
@@ -6014,10 +6243,19 @@ P._openContentDrawer = (contentId) => {
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">评论</div><div class="text-sm font-semibold mt-1">${P._renderMetricReadonly(c,'comments')}</div></div>
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">收藏</div><div class="text-sm font-semibold mt-1">${P._renderMetricReadonly(c,'favorites')}</div></div>
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">分享</div><div class="text-sm font-semibold mt-1">${P._renderMetricReadonly(c,'shares')}</div></div>
-            <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">下载</div><div class="text-sm font-semibold mt-1">${H.fmtNum(c.metrics?.downloads)}</div></div>
+            <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">私信咨询</div><div class="text-sm font-semibold mt-1">${H.fmtNum(operationReview.privateInquiries)}</div></div>
+            <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">引流进群</div><div class="text-sm font-semibold mt-1">${H.fmtNum(operationReview.groupJoins)}</div></div>
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">涨粉</div><div class="text-sm font-semibold mt-1">${H.fmtNum(c.metrics?.followerGrowth)}</div></div>
             <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">投流</div><div class="text-sm font-semibold mt-1">¥${c.metrics?.adCost||0}</div></div>
           </div>
+        </div>
+        <div class="border-t pt-4 mt-4">
+          <section>
+            <div class="text-sm font-semibold text-gray-900 mb-2.5">📝 内容优劣复盘</div>
+            <div class="rounded-2xl border border-gray-100 bg-gray-50/70 p-5">
+              <div class="text-sm text-gray-700 leading-7 whitespace-pre-wrap break-words">${operationReview.contentReview ? H.esc(operationReview.contentReview) : '<span class="text-gray-400">暂未填写复盘内容</span>'}</div>
+            </div>
+          </section>
         </div>
         <div>
           <h3 class="text-sm font-semibold text-gray-800 mb-3">🩺 数据诊断</h3>
@@ -6037,13 +6275,13 @@ P._openContentDrawer = (contentId) => {
         setTimeout(() => P._openContentTrendModal(cid), 40);
       };
     });
-    document.querySelectorAll('#drawer-box [data-jump-channels]').forEach(b=>{
-      b.onclick=(e)=>{
+    document.querySelectorAll('#drawer-box [data-content-channel-add]').forEach(b=>{
+      b.onclick=async(e)=>{
         e.stopPropagation();
         UI.closeDrawer();
-        setTimeout(() => {
-          window.location.hash = '#channels';
-          if(window.R && typeof R.go === 'function') R.go('channels');
+        setTimeout(async () => {
+          await P._openChannelModal(null, {contentId, suppressRefresh:true});
+          P._openContentDrawer(contentId);
         }, 40);
       };
     });
@@ -6077,8 +6315,7 @@ P._openContentEditModal = async (contentId) => {
   const c = S.contents.get(contentId);
   if(!c) return;
   const existingPublisher = P._contentPublisherInfo(c);
-  const publisherCandidates = await P._loadPublisherCandidates([existingPublisher]);
-  const publisherField = P._publisherFieldHtml(publisherCandidates, existingPublisher, {allowEmpty:true});
+  const operationReview = P._contentOperationReview(c);
   const html = `
     <div class="p-6">
       <h2 class="text-base font-semibold text-gray-900 mb-5">编辑内容</h2>
@@ -6093,15 +6330,11 @@ P._openContentEditModal = async (contentId) => {
           <div>${UI.renderField('发布时间','publishTime','time',c.publishTime||'')}</div>
           <div>${UI.renderField('平台','platform','select',c.platform||'',S.config.getPlatforms(),'选择平台')}</div>
         </div>
-        <div class="grid grid-cols-3 gap-4">
-          <div>${publisherField}</div>
-          <div>${UI.renderField('发布账号','publishAccount','text',P._contentAccountName(c),null,'公司主体号 / 小号A')}</div>
-          <div>${UI.renderField('账号类型','accountType','select',P._contentAccountType(c)||'',P._accountTypes,'选择账号类型')}</div>
-        </div>
         <div class="grid grid-cols-2 gap-4">
-          <div>${UI.renderField('评分','rating','select',c.rating||'',C.RATINGS,'未评分')}</div>
-          <div>${UI.renderField('实际耗时(分)','productionCostMinutes','number',String(c.productionCostMinutes||0))}</div>
+          <div>${UI.renderField('账号类型','accountType','select',P._contentAccountType(c)||'',P._accountTypes,'选择账号类型')}</div>
+          <div>${UI.renderField('发布账号','publishAccount','text',P._contentAccountName(c),null,'公司主体号 / 小号A')}</div>
         </div>
+        <div>${UI.renderField('评分','rating','select',c.rating||'',C.RATINGS,'未评分')}</div>
         <div class="border-t pt-3"><h3 class="text-sm font-semibold text-gray-700 mb-3">运营数据</h3></div>
         <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('观看量','views','number',String(c.metrics?.views||0))}</div>
@@ -6110,10 +6343,13 @@ P._openContentEditModal = async (contentId) => {
           <div>${UI.renderField('评论','comments','number',String(c.metrics?.comments||0))}</div>
           <div>${UI.renderField('收藏','favorites','number',String(c.metrics?.favorites||0))}</div>
           <div>${UI.renderField('分享','shares','number',String(c.metrics?.shares||0))}</div>
-          <div>${UI.renderField('下载','downloads','number',String(c.metrics?.downloads||0))}</div>
+          <div>${UI.renderField('私信咨询量','privateInquiries','number',String(operationReview.privateInquiries||0))}</div>
+          <div>${UI.renderField('引流进群人数','groupJoins','number',String(operationReview.groupJoins||0))}</div>
           <div>${UI.renderField('涨粉','followerGrowth','number',String(c.metrics?.followerGrowth||0))}</div>
           <div>${UI.renderField('投流金额','adCost','number',String(c.metrics?.adCost||0))}</div>
         </div>
+        <div class="border-t pt-3"><h3 class="text-sm font-semibold text-gray-700 mb-3">📝 内容优劣复盘</h3></div>
+        <div>${UI.renderField('复盘内容','contentReview','textarea',operationReview.contentReview||'',null,'记录内容表现好的原因、存在的问题和下次优化方向')}</div>
         <div class="flex justify-end gap-3 pt-2">
           <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
           <button type="button" class="cos-btn cos-btn-primary" id="content-edit-save">保存</button>
@@ -6173,7 +6409,6 @@ P._openContentEditModal = async (contentId) => {
   if(!result||result==='cancel') return;
 
   const data = result;
-  const publisher = P._resolvePublisher(data.publisherKey, publisherCandidates, existingPublisher);
 
   const metrics = {
     ...(c.metrics || {}),
@@ -6183,14 +6418,13 @@ P._openContentEditModal = async (contentId) => {
     comments: parseInt(data.comments) || 0,
     favorites: parseInt(data.favorites) || 0,
     shares: parseInt(data.shares) || 0,
-    downloads: parseInt(data.downloads) || 0,
     followerGrowth: parseInt(data.followerGrowth) || 0,
     adCost: parseInt(data.adCost) || 0,
     dataUpdatedAt: H.nowISO(),
     recordDays: c.metrics?.recordDays || [],
     publishAccount: String(data.publishAccount || '').trim(),
     accountType: data.accountType || '',
-    ...P._publisherFields(publisher)
+    ...P._publisherFields(existingPublisher)
   };
   if(P._hasAnyMetricChange(c.metrics || {}, metrics)) {
     metrics.metricHistory = P._appendMetricHistory(c.metrics || {}, metrics, { source:'manual_edit', importedAt:H.nowISO(), fileName:'编辑弹窗' });
@@ -6221,8 +6455,14 @@ P._openContentEditModal = async (contentId) => {
     publishDate: normalizedPublishDate,
     publishTime: normalizedPublishTime,
     platform: data.platform || c.platform,
-    productionCostMinutes: parseInt(data.productionCostMinutes) || 0,
+    productionCostMinutes: c.productionCostMinutes || 0,
     metrics,
+    review: {
+      ...((c.review && typeof c.review === 'object' && !Array.isArray(c.review)) ? c.review : {}),
+      privateInquiries: parseInt(data.privateInquiries) || 0,
+      groupJoins: parseInt(data.groupJoins) || 0,
+      contentReview: data.contentReview || ''
+    },
     updatedAt: H.nowISO()
   });
 
@@ -6351,17 +6591,21 @@ P._openCalendarPublishModal = async (date, target) => {
     return;
   }
   const defaultPublisher = P._currentPublisherInfo();
-  const publisherCandidates = await P._loadPublisherCandidates([defaultPublisher]);
-  const publisherField = P._publisherFieldHtml(publisherCandidates, defaultPublisher, {allowEmpty:false});
+  const contentTypes = S.config.getThemes();
+  const firstTopic = topics[0] || {};
   const topicOpts = topics.map(t=>`<option value="${H.esc(t.id)}">${H.esc(t.title)}</option>`).join('');
   const html2 = `<div class="p-6">
     <h2 class="text-base font-semibold text-gray-900 mb-4">新建内容 · ${date}</h2>
     <form id="cal-publish-form" class="space-y-3">
       <div><label class="cos-label">选题</label><select class="cos-select" name="topicId" id="cal-topic-select">${topicOpts}</select></div>
-      <div class="grid grid-cols-3 gap-4">
-        <div>${publisherField}</div>
-        <div>${UI.renderField('平台','platform','select','',S.config.getPlatforms(),'选择平台')}</div>
-        <div>${UI.renderField('发布时间','publishTime','time','')}</div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>${UI.renderField('平台 *','platform','select','',S.config.getPlatforms(),'选择平台')}</div>
+        <div>${UI.renderField('内容类型 *','theme','select',firstTopic.theme||'',contentTypes,'选择内容类型')}</div>
+      </div>
+      <div>${UI.renderField('发布时间','publishTime','time','')}</div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>${UI.renderField('账号类型','accountType','select','主体账号',P._accountTypes,'选择账号类型')}</div>
+        <div>${UI.renderField('发布账号','publishAccount','text','',null,'公司主体号 / 小号A')}</div>
       </div>
       <div>${UI.renderField('封面图','coverImage','image','')}</div>
       <div>${UI.renderField('发布截图','publishScreenshot','image','')}</div>
@@ -6387,20 +6631,27 @@ P._openCalendarPublishModal = async (date, target) => {
         }
       };
     });
+    const topicSelect = document.getElementById('cal-topic-select');
+    if(topicSelect) topicSelect.onchange = () => {
+      const selectedTopic = topics.find(item => item.id === topicSelect.value);
+      const typeSelect = document.querySelector('#cal-publish-form select[name="theme"]');
+      if(typeSelect) typeSelect.value = selectedTopic?.theme || '';
+    };
     const saveBtn = document.getElementById('cal-publish-save-btn');
     if(saveBtn) saveBtn.onclick=()=>{
       const form=document.getElementById('cal-publish-form');
       const data=UI.readForm(form);
       if(!data.platform){UI.toast('请选择平台','error');return;}
+      if(!data.theme){UI.toast('请选择内容类型','error');return;}
+      const selectedTopic = topics.find(item => item.id === data.topicId);
+      data.theme = data.theme || selectedTopic?.theme || '';
       data.publishDate=date;
       UI.closeModal(data);
     };
   },50);
   modalP.then(async result=>{if(!result||result==='cancel')return;
     const tid=result.topicId; delete result.topicId;
-    const publisher = P._resolvePublisher(result.publisherKey, publisherCandidates, defaultPublisher);
-    Object.assign(result, P._publisherFields(publisher));
-    delete result.publisherKey;
+    Object.assign(result, P._publisherFields(defaultPublisher));
     await S.publishTopic(tid,result);
     UI.toast('发布成功！');
     P.renderCalendar(target);
@@ -6657,19 +6908,12 @@ P.renderContentsPage = () => {
   P.renderContents('page-body-inner');
   // 内容库顶部操作按钮
   const actionsEl = document.getElementById('page-actions');
-  if(actionsEl) actionsEl.innerHTML = '<button class="cos-btn cos-btn-primary cos-btn-sm" id="btn-batch-sync-channel">📣 同步到渠道分发</button><button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-refresh-contents">↻ 刷新内容</button><button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-import-xhs">📥 导入小红书数据</button><button class="cos-btn cos-btn-secondary cos-btn-sm" id="btn-xhs-import-logs">🧾 导入记录</button>';
+  if(actionsEl) actionsEl.innerHTML = '<button class="cos-btn cos-btn-secondary" id="btn-export-content-data">📤 导出</button><button class="cos-btn cos-btn-primary" id="btn-import-content-data">📥 导入</button>';
   setTimeout(() => {
-    const syncBtn = document.getElementById('btn-batch-sync-channel');
-    const refreshBtn = document.getElementById('btn-refresh-contents');
-    const btn = document.getElementById('btn-import-xhs');
-    const logBtn = document.getElementById('btn-xhs-import-logs');
-    if(syncBtn) syncBtn.onclick = () => P._openBatchSyncChannelModal();
-    if(refreshBtn) refreshBtn.onclick = async () => {
-      refreshBtn.disabled = true; refreshBtn.textContent = '正在刷新...';
-      try { await S.reloadContents(); } catch(_) { refreshBtn.disabled = false; refreshBtn.textContent = '↻ 刷新内容'; }
-    };
-    if(btn) btn.onclick = () => P._importXiaohongshuData(btn);
-    if(logBtn) logBtn.onclick = () => P._openXhsImportLogs();
+    const exportBtn = document.getElementById('btn-export-content-data');
+    const importBtn = document.getElementById('btn-import-content-data');
+    if(exportBtn) exportBtn.onclick = async () => { await S.exportContentData(); };
+    if(importBtn) importBtn.onclick = () => P._importContentData(importBtn);
     P._bindContentReloadButton();
   }, 50);
 };
@@ -6838,8 +7082,7 @@ P._openBatchSyncChannelModal = async () => {
   if(window.Auth && Auth.log) Auth.log('渠道分发', '批量同步', selectedChannel || '按平台自动匹配', `同步 ${res.total} 条，新增 ${res.created} 条，更新 ${res.updated} 条`);
 
   UI.toast(`同步完成：新增 ${res.created} 条，更新 ${res.updated} 条${res.skipped ? '，跳过 '+res.skipped+' 条' : ''}`);
-  window.location.hash = '#channels';
-  if(window.R && typeof R.go === 'function') R.go('channels');
+  if(window.R?.currentRoute === 'contents') P.renderContentsPage();
 };
 
 
@@ -6965,12 +7208,11 @@ P._renderSettingsTab_Logs = () => {
 P._renderSettingsTab_Config = () => {
   const panel = document.getElementById('settings-panel'); if(!panel) return;
   const configs = [
-    { key:'themes', label:'内容主题', getter: S.config.getThemes, setter: S.config.setThemes },
+    { key:'themes', label:'内容类型', getter: S.config.getThemes, setter: S.config.setThemes },
     { key:'formats', label:'内容形式', getter: S.config.getFormats, setter: S.config.setFormats },
-    { key:'hooks', label:'钩子类型', getter: S.config.getHooks, setter: S.config.setHooks },
     { key:'goals', label:'运营目标', getter: S.config.getGoals, setter: S.config.setGoals },
     { key:'platforms', label:'发布平台', getter: S.config.getPlatforms, setter: S.config.setPlatforms },
-    { key:'channels', label:'分发渠道', getter: S.config.getChannels, setter: S.config.setChannels },
+    { key:'sourceChannels', label:'用户来源渠道', getter: S.config.getSourceChannels, setter: S.config.setSourceChannels },
   ];
 
   let html = '<div class="space-y-6">';
@@ -6992,30 +7234,6 @@ P._renderSettingsTab_Config = () => {
     </div>`;
   });
   html += '</div>';
-
-  // --- AI 模型配置 ---
-  const apiKey = AI._config.apiKey || '';
-  html += `<div class="cos-card p-5">
-    <h3 class="text-sm font-semibold text-gray-700 mb-3">🤖 AI 模型配置</h3>
-    <div class="space-y-3">
-      <div>
-        <label class="cos-label">API Key</label>
-        <div class="flex items-center gap-2">
-          <input class="cos-input" type="password" id="ai-key-input" value="${H.esc(apiKey)}" placeholder="sk-..." style="flex:1">
-          <button class="cos-btn cos-btn-primary cos-btn-sm" id="ai-key-save">保存</button>
-        </div>
-        <p class="text-xs text-gray-400 mt-1">Key 仅保存在当前浏览器会话，关闭浏览器后自动清除；当前设备每日最多 100 次。仍需在 DeepSeek 后台设置真实额度与费用预警。</p>
-      </div>
-      <div class="flex items-center gap-4">
-        <span class="text-xs text-gray-500">状态：</span>
-        ${apiKey?'<span class="inline-flex items-center gap-1 text-xs text-green-600">🟢 已配置</span>':'<span class="inline-flex items-center gap-1 text-xs text-red-400">🔴 未配置</span>'}
-        ${apiKey?'<button class="cos-btn cos-btn-secondary cos-btn-sm" id="ai-key-clear">清除 Key</button>':''}
-        ${apiKey?'<button class="cos-btn cos-btn-secondary cos-btn-sm" id="ai-health-check">检测连接</button>':''}
-      </div>
-    </div>
-  </div>`;
-
-  html += '</div>';
   panel.innerHTML = html;
 
   // 事件绑定
@@ -7028,28 +7246,12 @@ P._renderSettingsTab_Config = () => {
       if(idx < 0 || idx >= items.length) return;
       items.splice(idx,1);
       await cfg.setter([...items]);
-      UI.toast('已删除');
+      if(cfg.key === 'sourceChannels') UI.toast('已删除配置项；已有用户记录中的原渠道会继续保留');
+      else UI.toast('已删除');
       P._renderSettingsTab_Config();
     });
   });
 
-  // AI Key 事件
-  const keySave = document.getElementById('ai-key-save');
-  const keyInput = document.getElementById('ai-key-input');
-  const keyClear = document.getElementById('ai-key-clear');
-  const healthCheck = document.getElementById('ai-health-check');
-  if(keySave && keyInput) keySave.onclick = () => {
-    const v = (keyInput.value||'').trim();
-    AI.setKey(v);
-    UI.toast(v?'API Key 已保存':'API Key 已清空');
-    P._renderSettingsTab_Config();
-  };
-  if(keyClear) keyClear.onclick = () => { AI.setKey(''); UI.toast('Key 已清除'); P._renderSettingsTab_Config(); };
-  if(healthCheck) healthCheck.onclick = async () => {
-    UI.toast('正在检测连接...');
-    const ok = await AI.healthCheck();
-    UI.toast(ok?'✅ AI 服务连接正常':'❌ 连接失败，请检查 Key 或网络');
-  };
 };
 
 P._addConfigItem = async (cfg) => {
@@ -7126,6 +7328,18 @@ P._editConfigItem = async (cfg, idx) => {
   next[idx] = newName;
   await cfg.setter(next);
 
+  // 用户来源渠道改名时，同步更新用户分层里的历史记录。
+  if(cfg.key === 'sourceChannels' && typeof P._ledgerLoad === 'function' && typeof P._ledgerSave === 'function') {
+    const ledgerData = P._ledgerLoad();
+    let changed = false;
+    ledgerData.userProfile = (ledgerData.userProfile || []).map(record => {
+      if(String(record.sourceChannel || '') !== oldName) return record;
+      changed = true;
+      return {...record, sourceChannel:newName, updatedAt:H.nowISO()};
+    });
+    if(changed) await P._ledgerSave(ledgerData);
+  }
+
   // 分发渠道改名时，同步改历史分发记录里的渠道名，避免旧名字继续残留。
   if(cfg.key === 'channels' && typeof P._channelLoad === 'function' && typeof P._channelSave === 'function') {
     const records = P._channelLoad();
@@ -7182,10 +7396,10 @@ P._renderSettingsTab_Data = () => {
         <h3 class="text-sm font-semibold text-gray-700 mb-3">📤 导出数据</h3>
         <div class="flex gap-3">
           <button class="cos-btn cos-btn-primary" id="btn-export-json">导出 JSON（全部数据）</button>
-          <button class="cos-btn cos-btn-secondary" id="btn-export-csv">导出 CSV（仅内容库）</button>
+          <button class="cos-btn cos-btn-secondary" id="btn-export-csv">导出数据（内容库）</button>
           <button class="cos-btn cos-btn-secondary" id="btn-export-users-csv">导出 CSV（用户）</button>
         </div>
-        <p class="text-xs text-gray-400 mt-2">JSON 包含所有模块数据，CSV仅包含内容库或用户的运营数据。</p>
+        <p class="text-xs text-gray-400 mt-2">JSON 包含所有模块数据；内容库按运营字段导出 Excel，用户数据导出 CSV。</p>
       </div>
 
       <!-- 备份与恢复 -->
@@ -7237,7 +7451,7 @@ P._renderSettingsTab_Data = () => {
   panel.innerHTML = html;
 
   document.getElementById('btn-export-json').onclick = () => { S.exportJSON(); UI.toast('JSON 已导出'); };
-  document.getElementById('btn-export-csv').onclick = () => { S.exportCSV(); UI.toast('CSV 已导出'); };
+  document.getElementById('btn-export-csv').onclick = async () => { await S.exportCSV(); };
   document.getElementById('btn-export-users-csv').onclick = () => { P._exportUsersExcel(); };
   document.getElementById('btn-import-merge').onclick = () => P._importJSON('merge');
   document.getElementById('btn-import-overwrite').onclick = () => P._importJSON('overwrite');
@@ -7800,7 +8014,7 @@ P._openXhsImportResult = (log) => {
   const missing = P._xhsFieldText(log.missingFields);
   const updatedFields = P._xhsFieldText(log.updatedFields);
   let html = `<div class="p-6" style="max-width:860px">
-    <h3>📥 小红书导入结果</h3>
+    <h3>📥 小红书数据导入结果</h3>
     <div class="grid grid-cols-2 gap-3 text-sm mb-4">
       <div><span class="text-gray-400">文件名：</span>${H.esc(log.fileName || '-')}</div>
       <div><span class="text-gray-400">导入时间：</span>${H.esc(H.fmtDateTime(log.importedAt) || '-')}</div>
@@ -7902,7 +8116,7 @@ P._openXhsImportLogs = () => {
     });
     const clearBtn = document.getElementById('xhs-clear-logs');
     if(clearBtn) clearBtn.onclick = async () => {
-      const ok = await UI.confirm('清空导入记录', '确定要清空最近的小红书导入记录吗？', {danger:true, confirmText:'清空'});
+      const ok = await UI.confirm('清空导入记录', '确定要清空最近的数据导入记录吗？', {danger:true, confirmText:'清空'});
       if(ok) {
         localStorage.removeItem(P._XHS_IMPORT_LOG_KEY);
         P._openXhsImportLogs();
@@ -7921,7 +8135,7 @@ P._setXhsImportButtonLoading = (busy, text) => {
     btn.innerHTML = `<span class="cos-spinner" style="width:14px;height:14px;border-width:2px"></span>${H.esc(text || '处理中...')}`;
   } else {
     btn.classList.remove('opacity-70','cursor-not-allowed');
-    btn.innerHTML = btn.dataset.originalText || '📥 导入小红书数据';
+    btn.innerHTML = btn.dataset.originalText || '导入小红书数据';
   }
 };
 
@@ -7961,7 +8175,7 @@ P._importXiaohongshuData = (triggerBtn) => {
       }
     };
     P._setXhsImportButtonLoading(true, '正在解析...');
-    P._openXhsLoadingModal('正在解析小红书文件', `正在读取 ${file.name}，请稍候...`);
+    P._openXhsLoadingModal('正在解析数据文件', `正在读取 ${file.name}，请稍候...`);
     initialLoadingActive = true;
 
     // 解析文件
@@ -8048,6 +8262,11 @@ P._importXiaohongshuData = (triggerBtn) => {
     const colTitle = P._findCol(header, titleCandidates);
     const colDate = P._findCol(header, dateCandidates);
     const colLink = P._findCol(header, linkCandidates);
+    const colPlatform = P._findCol(header, ['平台','发布平台','内容平台','platform']);
+    const colContentType = P._findCol(header, ['内容类型','类型','contentType','content_type']);
+    const colPrivateInquiries = P._findCol(header, ['私信咨询量','私信咨询','私信量','咨询量','privateInquiries','private_inquiries']);
+    const colGroupJoins = P._findCol(header, ['引流进群人数','引流进群','进群人数','进群量','groupJoins','group_joins']);
+    const colContentReview = P._findCol(header, ['内容优劣复盘','复盘内容','内容复盘','复盘','contentReview','content_review']);
     const colViews = P._findCol(header, ['观看数','观看量','播放量','播放数','浏览量','浏览数','阅读量','阅读数','浏览次数','观看次数','播放次数','views','view']);
     const colExposure = P._findCol(header, ['曝光','曝光数','曝光量','展现','展现数','展现量','展示','展示数','展示量','impression','impressions','exposure']);
     const colLikes = P._findCol(header, ['点赞','点赞数','点赞量','赞','赞数','likes','like']);
@@ -8056,21 +8275,26 @@ P._importXiaohongshuData = (triggerBtn) => {
     const colShares = P._findCol(header, ['分享','分享数','分享量','转发','转发数','shares','share']);
 
     const xhsFieldMeta = [
-      { key:'title', label:'标题', col: colTitle, required:true },
-      { key:'date', label:'发布时间', col: colDate, required:true },
+      { key:'title', label:'内容标题', col: colTitle, required:true },
+      { key:'date', label:'发布日期', col: colDate, required:true },
+      { key:'platform', label:'平台', col: colPlatform },
+      { key:'contentType', label:'内容类型', col: colContentType },
       { key:'views', label:'观看量', col: colViews, metric:true },
-      { key:'exposure', label:'曝光', col: colExposure, metric:true },
-      { key:'likes', label:'点赞', col: colLikes, metric:true },
-      { key:'comments', label:'评论', col: colComments, metric:true },
-      { key:'favorites', label:'收藏', col: colFavorites, metric:true },
-      { key:'shares', label:'分享', col: colShares, metric:true },
+      { key:'exposure', label:'曝光量', col: colExposure, metric:true },
+      { key:'likes', label:'点赞数', col: colLikes, metric:true },
+      { key:'favorites', label:'收藏数', col: colFavorites, metric:true },
+      { key:'shares', label:'分享数', col: colShares, metric:true },
+      { key:'comments', label:'评论数', col: colComments, metric:true },
+      { key:'privateInquiries', label:'私信咨询量', col: colPrivateInquiries },
+      { key:'groupJoins', label:'引流进群人数', col: colGroupJoins },
+      { key:'contentReview', label:'内容优劣复盘', col: colContentReview },
     ];
     if(colLink >= 0) xhsFieldMeta.splice(2, 0, { key:'link', label:'链接', col: colLink });
     const recognizedFields = xhsFieldMeta.filter(f => f.col >= 0).map(f => f.label);
     const missingFields = xhsFieldMeta.filter(f => f.col < 0 && (f.required || f.metric)).map(f => f.label);
     const metricFields = xhsFieldMeta.filter(f => f.metric).map(f => ({ key:f.key, label:f.label }));
 
-    window.CONTENT_OS_DEBUG && console.log('识别到的列：', { colTitle, colLink, colDate, colViews, colExposure, colLikes, colComments, colFavorites, colShares });
+    window.CONTENT_OS_DEBUG && console.log('识别到的列：', { colTitle, colLink, colDate, colPlatform, colContentType, colViews, colExposure, colLikes, colComments, colFavorites, colShares, colPrivateInquiries, colGroupJoins, colContentReview });
 
     if(colTitle < 0 && colLink < 0 && colDate < 0) {
       finishInitialLoading();
@@ -8096,6 +8320,11 @@ P._importXiaohongshuData = (triggerBtn) => {
         title,
         link,
         date,
+        platform: colPlatform >= 0 ? String(r[colPlatform]||'').trim() : '',
+        contentType: colContentType >= 0 ? String(r[colContentType]||'').trim() : '',
+        privateInquiries: P._parseNumber(colPrivateInquiries >= 0 ? r[colPrivateInquiries] : null),
+        groupJoins: P._parseNumber(colGroupJoins >= 0 ? r[colGroupJoins] : null),
+        contentReview: colContentReview >= 0 ? String(r[colContentReview]||'').trim() : '',
         views: P._parseNumber(colViews >= 0 ? r[colViews] : null),
         exposure: P._parseNumber(colExposure >= 0 ? r[colExposure] : null),
         likes: P._parseNumber(colLikes >= 0 ? r[colLikes] : null),
@@ -8129,28 +8358,28 @@ P._importXiaohongshuData = (triggerBtn) => {
         }
       }
 
-      // 第二优先级: title + platform (小红书)
+      // 第二优先级: 标题 + 平台；文件没有平台列时仅按标题精确匹配。
       if(!best && imp.title) {
         const normTitle = P._normalizeTitle(imp.title);
+        const normPlatform = String(imp.platform || '').trim().toLowerCase();
         for(const c of contents) {
           if(matchedContentIds.has(c.id)) continue;
-          if(String(c.platform||'').toLowerCase().includes('小红书') || String(c.platform||'').toLowerCase().includes('xiaohongshu')) {
-            if(P._normalizeTitle(c.title||'') === normTitle) {
-              best = c; bestType = '标题+平台匹配'; break;
-            }
+          const samePlatform = !normPlatform || String(c.platform||'').trim().toLowerCase() === normPlatform;
+          if(samePlatform && P._normalizeTitle(c.title||'') === normTitle) {
+            best = c; bestType = normPlatform ? '标题+平台匹配' : '标题匹配'; break;
           }
         }
       }
 
-      // 第三优先级: title + publishDate + platform
+      // 第三优先级: 标题 + 发布日期 + 平台（平台可选）。
       if(!best && imp.title && imp.date) {
         const normTitle = P._normalizeTitle(imp.title);
+        const normPlatform = String(imp.platform || '').trim().toLowerCase();
         for(const c of contents) {
           if(matchedContentIds.has(c.id)) continue;
-          if(String(c.platform||'').toLowerCase().includes('小红书') || String(c.platform||'').toLowerCase().includes('xiaohongshu')) {
-            if(P._normalizeTitle(c.title||'') === normTitle && c.publishDate === imp.date) {
-              best = c; bestType = '标题+日期+平台匹配'; break;
-            }
+          const samePlatform = !normPlatform || String(c.platform||'').trim().toLowerCase() === normPlatform;
+          if(samePlatform && P._normalizeTitle(c.title||'') === normTitle && c.publishDate === imp.date) {
+            best = c; bestType = '标题+日期'+(normPlatform?'+平台':'')+'匹配'; break;
           }
         }
       }
@@ -8179,7 +8408,7 @@ P._importXiaohongshuData = (triggerBtn) => {
             else if(Math.abs(new Date(d1) - new Date(d2)) <= 3 * 86400000) score += 20;
             else if(Math.abs(new Date(d1) - new Date(d2)) <= 7 * 86400000) score += 10;
           }
-          if((c.platform||'').toLowerCase().includes('小红书')) score += 10;
+          if(imp.platform && String(c.platform||'').trim().toLowerCase() === String(imp.platform).trim().toLowerCase()) score += 10;
           if(score > bestScore && score >= 60) { bestScore = score; best = c; bestType = '相似度匹配(' + score + '%)'; }
         }
       }
@@ -8225,6 +8454,11 @@ P._importXiaohongshuData = (triggerBtn) => {
         if(imp.comments != null && imp.comments !== (c.metrics?.comments||0)) diffs.push(`评论${c.metrics?.comments||0}→${imp.comments}`);
         if(imp.favorites != null && imp.favorites !== (c.metrics?.favorites||0)) diffs.push(`收藏${c.metrics?.favorites||0}→${imp.favorites}`);
         if(imp.shares != null && imp.shares !== (c.metrics?.shares||0)) diffs.push(`分享${c.metrics?.shares||0}→${imp.shares}`);
+        const oldReview = P._contentOperationReview(c);
+        if(colContentType >= 0 && imp.contentType !== oldReview.contentType) diffs.push(`内容类型：${oldReview.contentType||'空'}→${imp.contentType||'空'}`);
+        if(imp.privateInquiries != null && imp.privateInquiries !== oldReview.privateInquiries) diffs.push(`私信咨询${oldReview.privateInquiries||0}→${imp.privateInquiries}`);
+        if(imp.groupJoins != null && imp.groupJoins !== oldReview.groupJoins) diffs.push(`引流进群${oldReview.groupJoins||0}→${imp.groupJoins}`);
+        if(colContentReview >= 0 && imp.contentReview !== oldReview.contentReview) diffs.push('内容优劣复盘有更新');
         const hasDiff = diffs.length > 0;
         previewHtml += `<div class="cos-card p-3 text-xs ${dupIds.includes(c.id)?'border-red-300 bg-red-50/30':''}">
           <div class="flex items-center justify-between">
@@ -8297,6 +8531,12 @@ P._importXiaohongshuData = (triggerBtn) => {
       });
 
       try {
+        const oldReview = (m.content.review && typeof m.content.review === 'object' && !Array.isArray(m.content.review)) ? m.content.review : {};
+        const newReview = { ...oldReview };
+        if(colContentType >= 0) { newReview.contentType = imp.contentType; updatedFieldSet.add('内容类型'); }
+        if(imp.privateInquiries != null) { newReview.privateInquiries = imp.privateInquiries; updatedFieldSet.add('私信咨询量'); }
+        if(imp.groupJoins != null) { newReview.groupJoins = imp.groupJoins; updatedFieldSet.add('引流进群人数'); }
+        if(colContentReview >= 0) { newReview.contentReview = imp.contentReview; updatedFieldSet.add('内容优劣复盘'); }
         if(imp.views != null) { newMetrics.views = imp.views; updatedFieldSet.add('观看量'); }
         if(imp.exposure != null) { newMetrics.exposure = imp.exposure; updatedFieldSet.add('曝光'); }
         if(imp.likes != null) { newMetrics.likes = imp.likes; updatedFieldSet.add('点赞'); }
@@ -8307,7 +8547,9 @@ P._importXiaohongshuData = (triggerBtn) => {
         newMetrics.metricHistory = P._appendMetricHistory(oldMetrics, newMetrics, { source:'xhs_import', importedAt:importTime, fileName:file.name });
 
         const res = await S.contents.update(m.content.id, {
+          ...(colContentType >= 0 ? { theme: imp.contentType || m.content.theme || '' } : {}),
           metrics: newMetrics,
+          review: newReview,
           updatedAt: H.nowISO()
         });
         if(res) {
@@ -8359,6 +8601,247 @@ P._importXiaohongshuData = (triggerBtn) => {
     UI.toast(`导入完成：共读取 ${rowTotal} 条，成功更新 ${updated} 条${failed>0?'，失败 '+failed+' 条':''}，未匹配 ${unmatched.length} 条。`);
     P.renderContents();
     P._openXhsImportResult(log);
+  };
+  input.click();
+};
+
+// ==================== 内容库通用数据导入 ====================
+// 对应内容库右上角“导入”按钮：自动识别后台标准表格或小红书后台导出的 Excel / CSV。
+// 已存在的内容按链接、标题、平台和发布日期匹配后更新；未匹配的数据自动新增。
+P._importContentData = (triggerBtn) => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.xlsx,.xls,.csv';
+
+  const parseCSV = (text) => {
+    const rows = [];
+    let row = [], cell = '', inQuotes = false;
+    for(let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if(ch === '"') {
+        if(inQuotes && text[i + 1] === '"') { cell += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if(ch === ',' && !inQuotes) {
+        row.push(cell); cell = '';
+      } else if((ch === '\n' || ch === '\r') && !inQuotes) {
+        if(ch === '\r' && text[i + 1] === '\n') i++;
+        row.push(cell); cell = '';
+        if(row.some(v => String(v || '').trim() !== '')) rows.push(row);
+        row = [];
+      } else {
+        cell += ch;
+      }
+    }
+    row.push(cell);
+    if(row.some(v => String(v || '').trim() !== '')) rows.push(row);
+    return rows;
+  };
+
+  const parseImportDate = (value) => {
+    if(value instanceof Date && !Number.isNaN(value.getTime())) return H.fmtDate(value);
+    if(typeof value === 'number' && typeof XLSX !== 'undefined' && XLSX.SSF?.parse_date_code) {
+      const d = XLSX.SSF.parse_date_code(value);
+      if(d) return `${d.y}-${String(d.m).padStart(2,'0')}-${String(d.d).padStart(2,'0')}`;
+    }
+    const raw = String(value ?? '').trim();
+    return H.parseDate(raw) || raw;
+  };
+
+  input.onchange = async (e) => {
+    const file = e.target.files?.[0];
+    if(!file) return;
+    const originalText = triggerBtn?.innerHTML || '导入';
+    if(triggerBtn) { triggerBtn.disabled = true; triggerBtn.innerHTML = '<span class="cos-spinner" style="width:14px;height:14px;border-width:2px"></span>正在读取...'; }
+
+    try {
+      const ext = String(file.name.split('.').pop() || '').toLowerCase();
+      let rows = [];
+      if(ext === 'xlsx' || ext === 'xls') {
+        if(typeof XLSX === 'undefined') throw new Error('Excel 组件尚未加载，请稍后重试');
+        const buf = await file.arrayBuffer();
+        const wb = XLSX.read(new Uint8Array(buf), {type:'array', cellDates:true});
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        rows = XLSX.utils.sheet_to_json(sheet, {header:1, defval:'', raw:true});
+      } else if(ext === 'csv') {
+        rows = parseCSV(await file.text());
+      } else {
+        throw new Error('仅支持 Excel 或 CSV 文件');
+      }
+      rows = rows.filter(r => Array.isArray(r) && r.some(v => String(v ?? '').trim() !== ''));
+      if(rows.length < 2) throw new Error('文件为空或没有可导入的数据');
+
+      const candidates = {
+        date: ['发布日期','发布时间','首次发布时间','日期','发布时刻','创建时间','笔记发布时间','作品发布时间','publishDate','publish_date','date','createdAt'],
+        platform: ['平台','发布平台','内容平台','platform'],
+        title: ['内容标题','标题','笔记标题','作品标题','笔记名称','作品名称','内容名称','标题名称','title','noteTitle','note_title','name'],
+        link: ['内容链接','链接','笔记链接','作品链接','笔记地址','作品地址','笔记URL','作品URL','url链接','url','link'],
+        contentType: ['内容类型','类型','contentType','content_type'],
+        views: ['观看量','观看数','播放量','播放数','浏览量','浏览数','阅读量','阅读数','浏览次数','观看次数','播放次数','views','view'],
+        exposure: ['曝光量','曝光','曝光数','展现量','展现数','展示量','展示数','impressions','impression','exposure'],
+        likes: ['点赞数','点赞','likes','like'],
+        favorites: ['收藏数','收藏','favorites','favorite','collect'],
+        shares: ['分享数','分享','分享量','转发数','转发','转发量','shares','share'],
+        comments: ['评论数','评论','comments','comment'],
+        privateInquiries: ['私信咨询量','私信咨询','私信量','privateInquiries','private_inquiries'],
+        groupJoins: ['引流进群人数','引流进群','进群人数','groupJoins','group_joins'],
+        contentReview: ['内容优劣复盘','内容复盘','复盘内容','复盘','contentReview','content_review']
+      };
+
+      let headerRowIdx = 0, header = rows[0].map(v => String(v ?? '').trim()), bestScore = -1;
+      for(let i = 0; i < Math.min(rows.length, 10); i++) {
+        const trial = rows[i].map(v => String(v ?? '').trim());
+        const score = Object.values(candidates).reduce((sum, list) => sum + (P._findCol(trial, list) >= 0 ? 1 : 0), 0);
+        if(score > bestScore) { bestScore = score; headerRowIdx = i; header = trial; }
+      }
+
+      const col = {};
+      Object.entries(candidates).forEach(([key, list]) => { col[key] = P._findCol(header, list); });
+      if(col.title < 0) throw new Error('未识别到“内容标题 / 笔记标题”字段');
+
+      const headerText = header.join('|');
+      const isXhsLike = /小红书|xiaohongshu|\bxhs\b/i.test(file.name)
+        || /笔记标题|笔记链接|笔记发布时间|首次发布时间/.test(headerText)
+        || rows.some(r => r.some(v => /xiaohongshu\.com/i.test(String(v ?? ''))));
+      const importSource = isXhsLike ? 'xhs_import' : 'content_data_import';
+
+      const imported = [];
+      const seenKeys = new Set();
+      let skipped = 0;
+      for(let i = headerRowIdx + 1; i < rows.length; i++) {
+        const r = rows[i];
+        const title = String(r[col.title] ?? '').trim();
+        if(!title) { skipped++; continue; }
+        const item = {
+          title,
+          publishDate: col.date >= 0 ? parseImportDate(r[col.date]) : '',
+          platform: col.platform >= 0 ? String(r[col.platform] ?? '').trim() : (isXhsLike ? '小红书' : ''),
+          contentLink: col.link >= 0 ? String(r[col.link] ?? '').trim() : '',
+          contentType: col.contentType >= 0 ? String(r[col.contentType] ?? '').trim() : '',
+          views: col.views >= 0 ? P._parseNumber(r[col.views]) : null,
+          exposure: col.exposure >= 0 ? P._parseNumber(r[col.exposure]) : null,
+          likes: col.likes >= 0 ? P._parseNumber(r[col.likes]) : null,
+          favorites: col.favorites >= 0 ? P._parseNumber(r[col.favorites]) : null,
+          shares: col.shares >= 0 ? P._parseNumber(r[col.shares]) : null,
+          comments: col.comments >= 0 ? P._parseNumber(r[col.comments]) : null,
+          privateInquiries: col.privateInquiries >= 0 ? P._parseNumber(r[col.privateInquiries]) : null,
+          groupJoins: col.groupJoins >= 0 ? P._parseNumber(r[col.groupJoins]) : null,
+          contentReview: col.contentReview >= 0 ? String(r[col.contentReview] ?? '').trim() : ''
+        };
+        const key = [String(item.contentLink || '').trim().toLowerCase(), P._normalizeTitle(item.title), item.platform.toLowerCase(), item.publishDate].join('|');
+        if(seenKeys.has(key)) { skipped++; continue; }
+        seenKeys.add(key);
+        imported.push(item);
+      }
+      if(!imported.length) throw new Error('没有识别到有效内容数据');
+
+      const existing = S.contents.all();
+      const usedIds = new Set();
+      const plans = imported.map(item => {
+        const nt = P._normalizeTitle(item.title);
+        const np = item.platform.toLowerCase();
+        const nd = item.publishDate;
+        const nl = String(item.contentLink || '').trim().replace(/\/$/, '').toLowerCase();
+        let match = nl ? existing.find(c => {
+          if(usedIds.has(c.id)) return false;
+          const cl = String(c.contentLink || c.sourceUrl || '').trim().replace(/\/$/, '').toLowerCase();
+          return cl && cl === nl;
+        }) : null;
+        if(!match) match = existing.find(c => !usedIds.has(c.id) && P._normalizeTitle(c.title || '') === nt && (!np || String(c.platform || '').trim().toLowerCase() === np) && (!nd || c.publishDate === nd));
+        if(!match && np) match = existing.find(c => !usedIds.has(c.id) && P._normalizeTitle(c.title || '') === nt && String(c.platform || '').trim().toLowerCase() === np);
+        if(!match && nd) match = existing.find(c => !usedIds.has(c.id) && P._normalizeTitle(c.title || '') === nt && c.publishDate === nd);
+        if(!match) {
+          const sameTitle = existing.filter(c => !usedIds.has(c.id) && P._normalizeTitle(c.title || '') === nt);
+          if(sameTitle.length === 1) match = sameTitle[0];
+        }
+        if(match) usedIds.add(match.id);
+        return {item, match};
+      });
+
+      const updateCount = plans.filter(p => p.match).length;
+      const addCount = plans.length - updateCount;
+      const confirmed = await UI.confirm(
+        isXhsLike ? '导入小红书数据' : '导入内容数据',
+        `共识别 ${plans.length} 条内容：已有数据将更新 ${updateCount} 条，未匹配数据将新增 ${addCount} 条${skipped ? `，跳过 ${skipped} 条空行或重复数据` : ''}。确认导入吗？`,
+        {confirmText:'确认导入'}
+      );
+      if(!confirmed) return;
+
+      if(triggerBtn) triggerBtn.innerHTML = '<span class="cos-spinner" style="width:14px;height:14px;border-width:2px"></span>正在导入...';
+      const importTime = H.nowISO();
+      let added = 0, updated = 0, failed = 0;
+
+      for(const plan of plans) {
+        const item = plan.item;
+        try {
+          if(plan.match) {
+            const c = plan.match;
+            const oldMetrics = {...(c.metrics || {})};
+            const metrics = {...oldMetrics};
+            if(item.views != null) metrics.views = item.views;
+            if(item.exposure != null) metrics.exposure = item.exposure;
+            if(item.likes != null) metrics.likes = item.likes;
+            if(item.favorites != null) metrics.favorites = item.favorites;
+            if(item.shares != null) metrics.shares = item.shares;
+            if(item.comments != null) metrics.comments = item.comments;
+            metrics.dataUpdatedAt = importTime;
+            if(typeof P._appendMetricHistory === 'function') {
+              metrics.metricHistory = P._appendMetricHistory(oldMetrics, metrics, {source:importSource, importedAt:importTime, fileName:file.name});
+            }
+
+            const oldReview = (c.review && typeof c.review === 'object' && !Array.isArray(c.review)) ? c.review : {};
+            const review = {...oldReview};
+            if(col.contentType >= 0) review.contentType = item.contentType;
+            if(item.privateInquiries != null) review.privateInquiries = item.privateInquiries;
+            if(item.groupJoins != null) review.groupJoins = item.groupJoins;
+            if(col.contentReview >= 0) review.contentReview = item.contentReview;
+
+            const patch = {metrics, review, updatedAt:importTime};
+            if(col.contentType >= 0) patch.theme = item.contentType || c.theme || '';
+            if(item.title) patch.title = item.title;
+            if(item.platform) patch.platform = item.platform;
+            if(item.publishDate) patch.publishDate = item.publishDate;
+            if(item.contentLink) patch.contentLink = item.contentLink;
+            const result = await S.contents.update(c.id, patch);
+            if(result) updated++; else failed++;
+          } else {
+            const metrics = {
+              exposure:item.exposure ?? 0, likes:item.likes ?? 0, comments:item.comments ?? 0,
+              favorites:item.favorites ?? 0, shares:item.shares ?? 0, views:item.views ?? 0, downloads:0,
+              followerGrowth:0, adCost:0, dataUpdatedAt:importTime, recordDays:[],
+              publishAccount:'', accountType:'', publisherId:'', publisherName:'', publisherEmail:''
+            };
+            if(typeof P._appendMetricHistory === 'function') {
+              metrics.metricHistory = P._appendMetricHistory({}, metrics, {source:importSource, importedAt:importTime, fileName:file.name});
+            }
+            const content = {
+              id:H.uid('ct_'), topicId:null, title:item.title, coverImage:null,
+              platform:item.platform || '其他', publishDate:item.publishDate || H.today(), publishTime:'',
+              contentLink:item.contentLink || null, bodyText:'', publishScreenshot:null, theme:item.contentType || '', format:'', hook:'', goal:'', tags:[],
+              productionCostMinutes:0, metrics, rating:null,
+              review:{why:'', result:'', successReasons:'', failureReasons:'', optimization:'', contentType:item.contentType || '', privateInquiries:item.privateInquiries ?? 0, groupJoins:item.groupJoins ?? 0, contentReview:item.contentReview || ''},
+              sourcePlatform:importSource, sourceUrl:item.contentLink || '', createdAt:importTime, updatedAt:importTime
+            };
+            const result = await S.contents.add(content);
+            if(result) added++; else failed++;
+          }
+        } catch(err) {
+          console.error('内容数据导入失败：', item.title, err);
+          failed++;
+        }
+      }
+
+      UI.toast(`导入完成：新增 ${added} 条，更新 ${updated} 条${failed ? `，失败 ${failed} 条` : ''}`, failed ? 'warn' : 'success');
+      P._contentPage = 1;
+      P.renderContentsPage();
+    } catch(err) {
+      console.error('内容库通用数据导入失败：', err);
+      UI.toast('导入失败：' + (err?.message || '文件格式不正确'), 'error');
+    } finally {
+      if(triggerBtn && document.body.contains(triggerBtn)) {
+        triggerBtn.disabled = false;
+        triggerBtn.innerHTML = originalText;
+      }
+    }
   };
   input.click();
 };
@@ -9262,7 +9745,7 @@ P.renderAnalytics = () => {
   }
   html += '</div>';
 
-  // ============ Section 4: 主题分析 ============
+  // ============ Section 4: 内容类型分析 ============
   const themes = [...new Set(filtered.map(c=>c.theme).filter(Boolean))];
   const themeStats = themes.map(t=>{
     const items = filtered.filter(c=>c.theme===t);
@@ -9275,7 +9758,7 @@ P.renderAnalytics = () => {
     };
   }).sort((a,b)=>b.count-a.count);
 
-  html += '<div class="cos-card p-5 mb-6"><h3 class="text-sm font-semibold text-gray-700 mb-4">📊 主题分析</h3>';
+  html += '<div class="cos-card p-5 mb-6"><h3 class="text-sm font-semibold text-gray-700 mb-4">📊 内容类型分析</h3>';
   if(themeStats.length===0) {
     html += UI.emptyState('暂无主题数据');
   } else {
@@ -9630,15 +10113,14 @@ P._renderContentChannelSummary = (contentId) => {
     return `<div class="border-t pt-4 mt-4">
       <div class="flex items-center justify-between mb-3">
         <h3 class="text-sm font-semibold text-gray-700">📣 渠道分发情况</h3>
-        <button class="cos-btn cos-btn-secondary cos-btn-xs" data-jump-channels>去记录分发</button>
+        <button class="cos-btn cos-btn-primary cos-btn-xs" data-content-channel-add>新增分发</button>
       </div>
       <div class="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 p-4 text-sm text-gray-400 text-center">
-        这篇内容还没有关联分发记录，可以去「渠道分发」记录发到 QQ频道/社群后的效果。
+        这篇内容还没有分发记录，可以直接在内容详情里新增并维护各渠道效果。
       </div>
     </div>`;
   }
 
-  const top = s.records.slice().sort((a,b)=>P._channelRecordScore(b)-P._channelRecordScore(a))[0];
   const list = s.records.slice().sort((a,b)=>P._channelRecordScore(b)-P._channelRecordScore(a)).slice(0,4).map(r => `<div class="rounded-xl border border-gray-100 bg-white p-3">
       <div class="flex items-center justify-between gap-2 mb-2">
         <div class="min-w-0">
@@ -9659,18 +10141,92 @@ P._renderContentChannelSummary = (contentId) => {
   return `<div class="border-t pt-4 mt-4">
     <div class="flex items-center justify-between mb-3">
       <h3 class="text-sm font-semibold text-gray-700">📣 渠道分发情况</h3>
-      <button class="cos-btn cos-btn-secondary cos-btn-xs" data-jump-channels>查看全部分发</button>
+      <button class="cos-btn cos-btn-secondary cos-btn-xs" data-content-channel-add>新增分发</button>
     </div>
-    <div class="grid grid-cols-5 gap-2 mb-3">
-      <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">分发渠道</div><div class="text-sm font-semibold mt-1">${s.count}</div></div>
-      <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">总浏览</div><div class="text-sm font-semibold mt-1">${H.fmtNum(s.views)}</div></div>
-      <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">引流</div><div class="text-sm font-semibold text-brand-600 mt-1">${H.fmtNum(s.leads)}</div></div>
-      <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">进群</div><div class="text-sm font-semibold text-emerald-600 mt-1">${H.fmtNum(s.groupAdds)}</div></div>
-      <div class="cos-card p-3 text-center"><div class="text-xs text-gray-400">下载</div><div class="text-sm font-semibold text-blue-600 mt-1">${H.fmtNum(s.downloads)}</div></div>
-    </div>
-    ${top ? `<div class="rounded-xl border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-700 mb-3">表现较好的分发：<b>${H.esc(top.channel || '其他')}</b> · 引流 ${H.fmtNum(P._channelNum(top.leads))} · 进群 ${H.fmtNum(P._channelNum(top.groupAdds))} · 下载 ${H.fmtNum(P._channelNum(top.downloads))}</div>` : ''}
     <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${list}</div>
   </div>`;
+};
+
+
+P._openContentChannelManager = async (contentId) => {
+  const content = S.contents.get(contentId);
+  if(!content) return;
+  const items = P._channelRecordsForContent(contentId)
+    .slice()
+    .sort((a,b)=>String(b.publishDate||'').localeCompare(String(a.publishDate||'')) || String(b.updatedAt||'').localeCompare(String(a.updatedAt||'')));
+
+  const cards = items.length ? items.map(r => `<div class="rounded-2xl border border-gray-100 bg-white p-4">
+    <div class="flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <div class="text-sm font-semibold text-gray-900 truncate">${H.esc(r.channel || '其他')}</div>
+        <div class="text-xs text-gray-400 mt-1">${H.showDate(r.publishDate)} ${H.esc(r.publishTime || '')}</div>
+      </div>
+      <div class="flex items-center gap-1">${P._channelStatusBadge(r.status)}${P._channelRatingBadge(r.rating)}</div>
+    </div>
+    <div class="grid grid-cols-4 gap-2 mt-4 text-center text-xs">
+      <div class="rounded-xl bg-gray-50 p-2"><div class="text-sm font-semibold text-gray-900">${H.fmtNum(P._channelNum(r.views))}</div><div class="text-gray-400 mt-0.5">浏览</div></div>
+      <div class="rounded-xl bg-blue-50/60 p-2"><div class="text-sm font-semibold text-brand-600">${H.fmtNum(P._channelNum(r.leads))}</div><div class="text-gray-400 mt-0.5">引流</div></div>
+      <div class="rounded-xl bg-emerald-50/60 p-2"><div class="text-sm font-semibold text-emerald-600">${H.fmtNum(P._channelNum(r.groupAdds))}</div><div class="text-gray-400 mt-0.5">进群</div></div>
+      <div class="rounded-xl bg-gray-50 p-2"><div class="text-sm font-semibold text-gray-900">${H.fmtNum(P._channelNum(r.downloads))}</div><div class="text-gray-400 mt-0.5">下载</div></div>
+    </div>
+    <div class="mt-3 text-xs text-gray-400">引流率 ${P._channelRatePct(r.leads, r.views)} · 进群率 ${P._channelRatePct(r.groupAdds, r.leads)} · 下载率 ${P._channelRatePct(r.downloads, r.leads)}</div>
+    <div class="flex items-center justify-end gap-2 mt-4 pt-3 border-t border-gray-100">
+      ${r.postLink ? `<a class="cos-btn cos-btn-ghost cos-btn-xs" href="${H.esc(r.postLink)}" target="_blank">打开链接</a>` : ''}
+      <button class="cos-btn cos-btn-secondary cos-btn-xs" data-content-channel-edit="${H.esc(r.id)}">编辑</button>
+      <button class="cos-btn cos-btn-ghost cos-btn-xs text-red-500" data-content-channel-delete="${H.esc(r.id)}">删除</button>
+    </div>
+  </div>`).join('') : `<div class="rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 px-5 py-10 text-center text-sm text-gray-400">暂无分发记录</div>`;
+
+  const html = `<div class="p-6">
+    <h2 class="text-base font-semibold text-gray-900">渠道分发记录</h2>
+    <div class="flex items-start justify-between gap-4 mb-5">
+      <div class="min-w-0">
+        <div class="text-sm text-gray-500 truncate">${H.esc(content.title || '未命名内容')}</div>
+        <div class="text-xs text-gray-400 mt-1">在内容详情中统一新增、编辑和复盘各渠道表现</div>
+      </div>
+      <button class="cos-btn cos-btn-primary cos-btn-sm shrink-0" id="content-channel-manager-add">新增分发</button>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${cards}</div>
+  </div>`;
+
+  const modalPromise = UI.openModal(html, {width:'max-w-5xl'});
+  setTimeout(() => {
+    const addBtn = document.getElementById('content-channel-manager-add');
+    if(addBtn) addBtn.onclick = () => UI.closeModal({action:'add'});
+    document.querySelectorAll('#modal-box [data-content-channel-edit]').forEach(btn => {
+      btn.onclick = () => UI.closeModal({action:'edit', id:btn.dataset.contentChannelEdit});
+    });
+    document.querySelectorAll('#modal-box [data-content-channel-delete]').forEach(btn => {
+      btn.onclick = () => UI.closeModal({action:'delete', id:btn.dataset.contentChannelDelete});
+    });
+  }, 20);
+
+  const result = await modalPromise;
+  if(!result) {
+    P._openContentDrawer(contentId);
+    return;
+  }
+  if(result.action === 'add') {
+    await P._openChannelModal(null, {contentId, suppressRefresh:true});
+    P._openContentChannelManager(contentId);
+    return;
+  }
+  if(result.action === 'edit' && result.id) {
+    await P._openChannelModal(result.id, {contentId, suppressRefresh:true});
+    P._openContentChannelManager(contentId);
+    return;
+  }
+  if(result.action === 'delete' && result.id) {
+    const ok = await UI.confirm('删除分发记录', '确定删除这条渠道分发记录？', {danger:true, confirmText:'删除'});
+    if(ok) {
+      const before = P._channelLoad();
+      const target = before.find(x => x.id === result.id);
+      await P._channelSave(before.filter(x => x.id !== result.id));
+      if(window.Auth && Auth.log) Auth.log('内容库', '删除分发记录', content.title || '', '渠道：' + (target?.channel || ''));
+      UI.toast('分发记录已删除');
+    }
+    P._openContentChannelManager(contentId);
+  }
 };
 
 
@@ -10191,18 +10747,21 @@ P.renderChannels = () => {
   });
 };
 
-P._openChannelModal = async (recordId=null) => {
+P._openChannelModal = async (recordId=null, options={}) => {
+  if(typeof options === 'string') options = {contentId:options};
+  const presetContentId = options.contentId || '';
   const isEdit = !!recordId;
   const items = P._channelLoad();
-  const r = isEdit ? items.find(x => x.id === recordId) : {};
+  const r = isEdit ? items.find(x => x.id === recordId) : {contentId:presetContentId};
   if(isEdit && !r) return;
   const existingPublisher = isEdit ? P._channelPublisherInfo(r) : P._currentPublisherInfo();
   const publisherCandidates = await P._loadPublisherCandidates([existingPublisher]);
   const publisherField = P._publisherFieldHtml(publisherCandidates, existingPublisher, {allowEmpty:isEdit});
 
+  const presetContent = presetContentId ? S.contents.get(presetContentId) : null;
   const filterChannel = (!isEdit && P._channelFilter && P._channelFilter !== 'all') ? P._channelFilter : '';
   const channelOptions = [...new Set([...P._channelOptions(), r?.channel, filterChannel].filter(Boolean))];
-  const defaultChannel = isEdit ? (r.channel || channelOptions[0] || '其他') : (filterChannel || channelOptions[0] || '其他');
+  const defaultChannel = isEdit ? (r.channel || channelOptions[0] || '其他') : (presetContent?.platform || filterChannel || channelOptions[0] || '其他');
   const defaultSubChannel = isEdit
     ? (P._isCommunityDistributionChannel(defaultChannel) ? (r.subChannel || (P._channelSpecificName(r)!==defaultChannel ? P._channelSpecificName(r) : '') || '') : '')
     : '';
@@ -10311,7 +10870,12 @@ P._openChannelModal = async (recordId=null) => {
     P._channelFilter = record.channel;
   }
   UI.toast(isEdit ? '分发记录已更新' : '分发记录已保存');
-  P.renderChannels();
+  if(!options.suppressRefresh) {
+    const route = window.R?.currentRoute || window.location.hash.replace('#','') || '';
+    if(route === 'channels') P.renderChannels();
+    else if(record.contentId) P._openContentDrawer(record.contentId);
+  }
+  return record;
 };
 
 
@@ -10510,14 +11074,26 @@ P.routes = {
   topics:   () => { P._setHeader('选题库', '管理内容选题与优先级'); P.renderTopicsPage(); },
   contents: () => { P._setHeader('内容库', '已完成内容的归档管理'); P.renderContentsPage(); },
   calendar:   () => { P._setHeader('内容日历', '排期与发布计划'); P.renderCalendarPage(); },
-  channels:   () => { P._setHeader('渠道分发记录', '判断具体频道/时间段 · 复盘引流效果'); P.renderChannels(); },
+  channels:   () => { window.location.hash = '#contents'; P._setHeader('内容库', '已完成内容的归档管理'); P.renderContentsPage(); },
   'content-center': () => { P._setHeader('选题库', '管理内容选题与优先级'); P.renderTopicsPage(); },
   analytics:  () => { P._setHeader('数据分析', '运营数据可视化'); P.renderAnalytics(); },
-  users:      () => { P._setHeader('内测用户', '用户投放管理与追踪'); P.renderUsers(); },
-  knowledge:  () => { P._setHeader('知识库', '运营方法 · 钩子 · 结构 · 文案 · 转化 · 复盘'); P.renderKnowledge(); },
-  loginManage:() => { P._setHeader('登录管理', 'Supabase Auth 账号 · 停用/改密'); P.renderLoginManage(); },
+  users:      () => { P._ledgerType='userProfile'; P.renderLedgers?.(); },
+  loginManage:() => {
+    if(!(window.Auth && Auth.isAdmin && Auth.isAdmin())) {
+      if(window.R) return R.navigate('settings', {replace:true});
+      return;
+    }
+    P._setHeader('登录管理', 'Supabase Auth 账号 · 停用/改密');
+    P.renderLoginManage();
+  },
   backups:    () => { P._settingsTab='backups'; P._setHeader('系统设置', '数据 · 备份 · 配置'); P.renderSettings(); },
-  settings:   () => { P._setHeader('系统设置', '数据 · 备份 · 配置'); P.renderSettings(); },
+  settings:   () => {
+    const validTabs = ['data','backups','config','logs'];
+    if(!validTabs.includes(P._settingsTab)) P._settingsTab = 'data';
+    if(P._settingsTab === 'logs' && !(window.Auth && Auth.isAdmin && Auth.isAdmin())) P._settingsTab = 'data';
+    P._setHeader('系统设置', '数据 · 备份 · 配置');
+    P.renderSettings();
+  },
   data:       () => { P._settingsTab='data'; P._setHeader('系统设置', '数据 · 备份 · 配置'); P.renderSettings(); },
 };
 
@@ -10532,7 +11108,7 @@ P._setHeader = (title, subtitle) => {
 </script>
 
 <!-- ======================================================================
-     Script 5.2: operation-ledgers.js — 五类运营台账统一录入与管理
+     Script 5.2: operation-ledgers.js — 三类运营台账统一录入与管理
      ====================================================================== -->
 <script>
 ;(function() {
@@ -10555,10 +11131,11 @@ P._ledgerFiltersByType = P._ledgerFiltersByType || {};
 P._ledgerPageByType = P._ledgerPageByType || {};
 P._ledgerSelectedByType = P._ledgerSelectedByType || {};
 P._ledgerPageSize = 20;
+P._userProfileView = P._userProfileView || 'all'; // all | beta | exited | active | key
 
 P._ledgerTypes = {
   feedback: {
-    label:'用户反馈台账', shortLabel:'用户反馈', icon:'💬',
+    label:'用户反馈', shortLabel:'用户反馈', icon:'💬',
     description:'集中记录用户问题、产品采纳和迭代闭环情况',
     searchPlaceholder:'搜索用户昵称、反馈内容',
     dateField:'date', filterFields:['feedbackType','severity','adopted','iterationProgress','followStatus'], summaryField:'followStatus', summaryValue:'已闭环', summaryLabel:'已闭环',
@@ -10575,48 +11152,8 @@ P._ledgerTypes = {
     ],
     columns:['date','userNickname','feedbackType','details','frequency','severity','adopted','iterationProgress','followStatus']
   },
-  community: {
-    label:'社群运维台账', shortLabel:'社群运维', icon:'👥',
-    description:'按日记录社群人数、互动、问题与运营动作',
-    searchPlaceholder:'搜索社群名称、活跃问题、运营动作',
-    dateField:'date', filterFields:[], sumField:'interactions', sumLabel:'互动量合计',
-    fields:[
-      {key:'date', label:'日期', type:'date', required:true},
-      {key:'communityName', label:'社群名称', type:'text', required:true, placeholder:'填写社群名称'},
-      {key:'totalMembers', label:'总人数', type:'number'},
-      {key:'newMembers', label:'新增人数', type:'number'},
-      {key:'leftMembers', label:'退群人数', type:'number'},
-      {key:'interactions', label:'今日互动量', type:'number'},
-      {key:'adCleanups', label:'广告清理数', type:'number'},
-      {key:'activeIssues', label:'活跃问题', type:'textarea', full:true, placeholder:'记录当天群内高频问题或讨论'},
-      {key:'actions', label:'今日运营动作', type:'textarea', full:true, placeholder:'记录发布内容、互动、答疑等动作'},
-      {key:'optimizations', label:'优化记录', type:'textarea', full:true, placeholder:'记录后续需要调整的运营方式'}
-    ],
-    columns:['date','communityName','totalMembers','newMembers','leftMembers','interactions','adCleanups','activeIssues','actions','optimizations']
-  },
-  contentData: {
-    label:'内容数据台账', shortLabel:'内容数据', icon:'📊',
-    description:'统一记录各平台内容表现、咨询和引流结果',
-    searchPlaceholder:'搜索内容标题、内容复盘',
-    dateField:'publishDate', filterFields:['platform','contentType'], sumField:'exposure', sumLabel:'曝光量合计',
-    fields:[
-      {key:'publishDate', label:'发布日期', type:'date', required:true},
-      {key:'platform', label:'平台', type:'select', required:true, options:['小红书','抖音','视频号']},
-      {key:'contentTitle', label:'内容标题', type:'contentSelect', required:true, full:true, placeholder:'请选择内容库已有标题'},
-      {key:'contentType', label:'内容类型', type:'select', options:['干货','路书','产品前瞻']},
-      {key:'exposure', label:'曝光量', type:'number'},
-      {key:'likes', label:'点赞数', type:'number'},
-      {key:'favorites', label:'收藏数', type:'number'},
-      {key:'shares', label:'转发数', type:'number'},
-      {key:'comments', label:'评论数', type:'number'},
-      {key:'privateInquiries', label:'私信咨询量', type:'number'},
-      {key:'groupJoins', label:'引流进群人数', type:'number'},
-      {key:'review', label:'内容优劣复盘', type:'textarea', full:true, placeholder:'记录内容表现好的原因、问题和下次优化方向'}
-    ],
-    columns:['publishDate','platform','contentTitle','contentType','exposure','likes','favorites','shares','comments','privateInquiries','groupJoins','review']
-  },
   cooperation: {
-    label:'渠道资源合作台账', shortLabel:'渠道合作', icon:'🤝',
+    label:'渠道资源合作', shortLabel:'渠道合作', icon:'🤝',
     description:'记录渠道对接、合作方式、效果和下一步计划',
     searchPlaceholder:'搜索渠道名称、对接人、联系方式',
     filterFields:['channelType','cooperationMethod','cooperationProgress'], summaryField:'cooperationProgress', summaryValue:'已合作', summaryLabel:'已合作',
@@ -10636,26 +11173,39 @@ P._ledgerTypes = {
     columns:['channelName','channelType','contactName','contactInfo','cooperationMethod','cooperationProgress','exposureEffect','leadCount','nextPlan','reviewFocus']
   },
   userProfile: {
-    label:'用户信息分层台账', shortLabel:'用户分层', icon:'🧩',
-    description:'沉淀用户来源、标签、车辆信息、活跃度和内测资格',
+    label:'用户分层', shortLabel:'用户分层', icon:'🧩',
+    description:'统一沉淀用户来源、标签、车辆信息、活跃度与内测状态',
     searchPlaceholder:'搜索用户昵称、联系方式、车型、职业',
-    dateField:'date', filterFields:['sourceChannel','userTags','vehicleType','activity','betaEligibility'], summaryField:'betaEligibility', summaryValue:'是', summaryLabel:'内测用户',
+    dateField:'date', filterFields:['sourceChannel','userTags','vehicleType','activity','betaStatus','userLevel'],
+    hideSequence:false,
     fields:[
-      {key:'date', label:'日期', type:'date', required:true},
+      {key:'date', label:'加入时间', type:'date', required:true},
       {key:'userNickname', label:'用户昵称', type:'text', required:true, placeholder:'填写用户昵称'},
       {key:'contactInfo', label:'联系方式', type:'text', placeholder:'手机号、微信或其他联系方式'},
-      {key:'sourceChannel', label:'来源渠道', type:'select', options:['小红书','抖音','社群']},
+      {key:'sourceChannel', label:'来源渠道', type:'select', dynamicOptions:'sourceChannels', options:[]},
       {key:'userTags', label:'用户标签（自驾类型）', type:'multi', full:true, options:['高频','长途自驾','短途周末游','家庭自驾','小众户外','新手自驾','房车','露营用户','年轻情侣旅行']},
-      {key:'vehicleType', label:'车辆类型', type:'select', options:['油车','新能源车']},
+      {key:'vehicleType', label:'车辆类型', type:'select', options:['油车','新能源车','混动车','暂未购车']},
       {key:'vehicleModel', label:'具体车型', type:'text', placeholder:'填写品牌和车型'},
       {key:'occupation', label:'职业', type:'text', placeholder:'可在后续观察补充'},
       {key:'activity', label:'活跃度', type:'select', options:['高','中','低']},
       {key:'feedbackCount', label:'反馈次数', type:'number'},
-      {key:'betaEligibility', label:'内测资格', type:'select', options:['是','否']},
-      {key:'userLevel', label:'用户等级', type:'text', placeholder:'填写用户等级'},
-      {key:'notes', label:'备注', type:'textarea', full:true, placeholder:'补充用户特征、沟通情况或重点关注事项'}
+      {key:'lastActiveAt', label:'最近活跃', type:'date'},
+      {key:'betaStatus', label:'内测状态', type:'select', options:['非内测','待筛选','待邀请','内测中','已退出','暂不适合']},
+      {key:'betaEligibility', label:'是否具备内测资格', type:'select', options:['是','否']},
+      {key:'betaJoinDate', label:'加入内测日期', type:'date'},
+      {key:'betaExitDate', label:'退出日期', type:'date'},
+      {key:'exitReason', label:'退出原因', type:'textarea', full:true, placeholder:'记录退群、停止参与或不再适合内测的原因'},
+      {key:'device', label:'使用设备', type:'select', options:['Android','iPhone','HarmonyOS','其他']},
+      {key:'acquisitionCost', label:'投放花费', type:'number'},
+      {key:'userLevel', label:'用户等级', type:'select', options:['核心用户','潜力用户','普通用户','待观察']},
+      {key:'keyUser', label:'重点用户', type:'select', options:['是','否']},
+      {key:'notes', label:'备注', type:'textarea', full:true, placeholder:'补充用户特征、沟通情况或重点关注事项'},
+      {key:'vehicleInfo', label:'车辆信息', type:'computed', computed:true},
+      {key:'userPortrait', label:'用户画像', type:'computed', computed:true}
     ],
-    columns:['date','userNickname','contactInfo','sourceChannel','userTags','vehicleType','vehicleModel','occupation','activity','feedbackCount','betaEligibility','userLevel','notes']
+    columns:['userNickname','sourceChannel','userPortrait','activity','feedbackCount','betaStatus','date'],
+    exportColumns:['date','userNickname','contactInfo','sourceChannel','userTags','vehicleType','vehicleModel','occupation','activity','feedbackCount','betaEligibility','userLevel','notes'],
+    importColumns:['date','userNickname','contactInfo','sourceChannel','userTags','vehicleType','vehicleModel','occupation','activity','feedbackCount','lastActiveAt','betaStatus','betaEligibility','betaJoinDate','betaExitDate','exitReason','device','acquisitionCost','userLevel','keyUser','notes']
   }
 };
 
@@ -10671,10 +11221,122 @@ P._ledgerNormalize = (value) => {
   Object.keys(P._ledgerTypes).forEach(type => {
     base[type] = Array.isArray(value[type]) ? value[type].filter(Boolean) : [];
   });
+  // 已从界面移除的旧模块仍保留历史数据，避免后续保存其他台账时误清空旧记录。
+  base.community = Array.isArray(value.community) ? value.community.filter(Boolean) : [];
+  base.contentData = Array.isArray(value.contentData) ? value.contentData.filter(Boolean) : [];
   base.version = 1;
   base.updatedAt = value.updatedAt || '';
   if(value._pendingSync) base._pendingSync = true;
   return base;
+};
+
+
+P._userProfileStatus = (record) => {
+  const status = String(record?.betaStatus || '').trim();
+  if(status) return status;
+  if(String(record?.betaEligibility || '') === '是') return '内测中';
+  return '非内测';
+};
+
+P._userProfileViewMatches = (record, view=P._userProfileView) => {
+  const status = P._userProfileStatus(record);
+  if(view === 'beta') return status === '内测中';
+  if(view === 'exited') return status === '已退出';
+  if(view === 'active') return String(record?.activity || '') === '高';
+  if(view === 'key') return String(record?.keyUser || '') === '是' || String(record?.userLevel || '') === '核心用户';
+  return true;
+};
+
+P._userProfileStats = (records=[]) => {
+  const currentMonth = H.today().slice(0,7);
+  const now = new Date();
+  const cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate()-29);
+  const isRecent = (value) => {
+    const raw = H.parseDate(value) || String(value || '').slice(0,10);
+    if(!raw) return false;
+    const d = new Date(raw + 'T00:00:00');
+    return !Number.isNaN(d.getTime()) && d >= cutoff;
+  };
+  const total = records.length;
+  const active30 = records.filter(r => isRecent(r.lastActiveAt || r.updatedAt || r.date)).length;
+  const thisMonth = records.filter(r => String(H.parseDate(r.date) || r.date || '').startsWith(currentMonth)).length;
+  const beta = records.filter(r => P._userProfileStatus(r) === '内测中').length;
+  const exited = records.filter(r => P._userProfileStatus(r) === '已退出').length;
+  const key = records.filter(r => String(r.keyUser || '') === '是' || String(r.userLevel || '') === '核心用户').length;
+  const high = records.filter(r => String(r.activity || '') === '高').length;
+  return {total, active30, thisMonth, beta, exited, key, high};
+};
+
+P._ledgerPrepareUserProfiles = (data) => {
+  if(!data || typeof data !== 'object') return data;
+  const list = Array.isArray(data.userProfile) ? data.userProfile.map(r => ({...r})) : [];
+  let changed = false;
+  const normalizedNames = new Set();
+
+  list.forEach(record => {
+    const name = String(record.userNickname || '').trim().toLowerCase();
+    if(name) normalizedNames.add(name);
+    if(!record.betaStatus) {
+      record.betaStatus = String(record.betaEligibility || '') === '是' ? '内测中' : '非内测';
+      changed = true;
+    }
+    if(!record.betaEligibility) {
+      record.betaEligibility = ['待筛选','待邀请','内测中'].includes(record.betaStatus) ? '是' : '否';
+      changed = true;
+    }
+    if(!record.keyUser) { record.keyUser = record.userLevel === '核心用户' ? '是' : '否'; changed = true; }
+    if(!record.userLevel) { record.userLevel = '普通用户'; changed = true; }
+    if(!record.lastActiveAt) {
+      record.lastActiveAt = H.parseDate(record.updatedAt || record.date) || '';
+      changed = true;
+    }
+    if(!Array.isArray(record.userTags)) { record.userTags = record.userTags ? [String(record.userTags)] : []; changed = true; }
+  });
+
+  // 将旧「内测用户」模块的数据一次性并入用户分层，用户分层已有同昵称记录时不覆盖。
+  try {
+    const legacyUsers = S?.users?.all?.() || [];
+    legacyUsers.forEach(user => {
+      const nickname = String(user.nickname || user.name || '').trim();
+      if(!nickname || normalizedNames.has(nickname.toLowerCase())) return;
+      const remark = String(user.remark || user.notes || '').replace(/当前用户|已退群/g,'').replace(/^[｜|,，\s]+|[｜|,，\s]+$/g,'').trim();
+      const isLeft = user.status === 'left' || String(user.remark || '').includes('已退群');
+      const joinDate = H.parseDate(user.joinDate || user.date) || '';
+      const updatedDate = H.parseDate(user.updatedAt || joinDate) || joinDate;
+      list.push({
+        id:user.id || H.uid('ledger_'),
+        date:joinDate || H.today(),
+        userNickname:nickname,
+        contactInfo:'',
+        sourceChannel:user.source || '',
+        userTags:Array.isArray(user.tags) ? user.tags : [],
+        vehicleType:'', vehicleModel:'', occupation:'',
+        activity:'中', feedbackCount:0, lastActiveAt:updatedDate,
+        betaStatus:isLeft ? '已退出' : '内测中', betaEligibility:'是',
+        betaJoinDate:joinDate, betaExitDate:H.parseDate(user.leaveDate) || '',
+        exitReason:isLeft ? remark : '',
+        device:user.device || '', acquisitionCost:P._ledgerNumber(user.acquisitionCost || user.spend),
+        userLevel:'普通用户', keyUser:'否', notes:isLeft ? '' : remark,
+        createdAt:user.createdAt || H.nowISO(), updatedAt:user.updatedAt || H.nowISO(),
+        createdBy:user.createdBy || '', updatedBy:user.updatedBy || ''
+      });
+      normalizedNames.add(nickname.toLowerCase());
+      changed = true;
+    });
+  } catch(e) {
+    console.warn('旧内测用户数据并入用户分层失败：', e);
+  }
+
+  if(!changed) return data;
+  data.userProfile = list;
+  data.updatedAt = H.nowISO();
+  if(S?.db?.config) S.db.config[P._LEDGER_CONFIG_KEY] = data;
+  const localPending = {...data, _pendingSync:true};
+  P._ledgerWriteLocal(localPending);
+  P._ledgerSyncToCloud(data).then(ok => {
+    if(ok) P._ledgerWriteLocal(data);
+  });
+  return data;
 };
 
 P._ledgerReadLocal = () => {
@@ -10759,6 +11421,23 @@ P._ledgerSave = async (value) => {
 };
 
 P._ledgerField = (cfg, key) => cfg.fields.find(f => f.key === key) || {key, label:key, type:'text'};
+P._ledgerFieldOptions = (field, {currentValue='', includeUsed=false}={}) => {
+  let options = Array.isArray(field?.options) ? [...field.options] : [];
+  if(field?.dynamicOptions === 'sourceChannels' || field?.key === 'sourceChannel') {
+    const configured = (S?.config?.getSourceChannels?.() || C.DEFAULT_SOURCE_CHANNELS || []).filter(Boolean);
+    options = [...configured];
+    if(includeUsed) {
+      const ledger = S?.db?.config?.[P._LEDGER_CONFIG_KEY];
+      const used = Array.isArray(ledger?.userProfile)
+        ? ledger.userProfile.map(record => String(record?.sourceChannel || '').trim()).filter(Boolean)
+        : [];
+      options.push(...used);
+    }
+  }
+  if(Array.isArray(currentValue)) options.push(...currentValue.filter(Boolean));
+  else if(String(currentValue || '').trim()) options.push(String(currentValue).trim());
+  return [...new Set(options.map(item => String(item || '').trim()).filter(Boolean))];
+};
 P._ledgerPage = (type) => P._ledgerPageByType[type] || 1;
 P._ledgerSetPage = (type, page) => { P._ledgerPageByType[type] = Math.max(1, Number(page) || 1); };
 P._ledgerSelected = (type) => {
@@ -10797,10 +11476,10 @@ P._ledgerDateValue = (record, cfg) => {
 P._ledgerBadge = (value) => {
   const v = String(value || '');
   if(!v) return '<span class="text-gray-400">-</span>';
-  const green = ['是','已闭环','已上线','已合作','高'];
-  const blue = ['开发中','小红书','抖音','视频号'];
-  const amber = ['待跟进','待排期','洽谈中','中'];
-  const gray = ['否','已结束','低'];
+  const green = ['是','已闭环','已上线','已合作','高','内测中'];
+  const blue = ['开发中','小红书','抖音','视频号','待邀请'];
+  const amber = ['待跟进','待排期','洽谈中','中','待筛选'];
+  const gray = ['否','已结束','低','非内测','已退出','暂不适合'];
   let cls = 'bg-gray-50 text-gray-600 border-gray-200';
   if(green.includes(v)) cls = 'bg-green-50 text-green-700 border-green-200';
   else if(blue.includes(v)) cls = 'bg-blue-50 text-blue-700 border-blue-200';
@@ -10812,10 +11491,31 @@ P._ledgerBadge = (value) => {
 
 P._ledgerDisplay = (record, field, opts={}) => {
   const value = record?.[field.key];
+  if(field.type === 'computed' && field.key === 'vehicleInfo') {
+    const parts = [record?.vehicleType, record?.vehicleModel].map(v=>String(v||'').trim()).filter(Boolean);
+    return parts.length ? `<div class="max-w-[220px] overflow-hidden whitespace-nowrap text-ellipsis" title="${P._ledgerAttr(parts.join(' · '))}">${H.esc(parts.join(' · '))}</div>` : '<span class="text-gray-400">-</span>';
+  }
+  if(field.type === 'computed' && field.key === 'userPortrait') {
+    const tags = Array.isArray(record?.userTags) ? record.userTags.map(v=>String(v||'').trim()).filter(Boolean).slice(0,2) : [];
+    const vehicle = [record?.vehicleType, record?.vehicleModel].map(v=>String(v||'').trim()).filter(Boolean);
+    const parts = [...tags, ...vehicle];
+    const text = parts.join(' · ');
+    return text ? `<div class="max-w-[300px] overflow-hidden whitespace-nowrap text-ellipsis" title="${P._ledgerAttr(text)}">${H.esc(text)}</div>` : '<span class="text-gray-400">-</span>';
+  }
+  if(field.key === 'userNickname' && !opts.detail) {
+    const name = String(value || '').trim();
+    if(!name) return '<span class="text-gray-400">-</span>';
+    const star = String(record?.keyUser || '') === '是' || String(record?.userLevel || '') === '核心用户' ? '<span class="mr-1" title="重点用户">⭐</span>' : '';
+    return `<div class="font-medium text-gray-900 whitespace-nowrap">${star}${H.esc(name)}</div>`;
+  }
   if(field.type === 'multi') {
     const arr = Array.isArray(value) ? value : [];
     if(!arr.length) return '<span class="text-gray-400">-</span>';
     if(opts.detail) return `<div class="flex flex-wrap gap-1">${arr.map(v=>`<span class="cos-tag text-xs">${H.esc(v)}</span>`).join('')}</div>`;
+    if(field.key === 'userTags') {
+      const shown = arr.slice(0,2);
+      return `<div class="flex items-center gap-1 whitespace-nowrap">${shown.map(v=>`<span class="cos-tag text-xs">${H.esc(v)}</span>`).join('')}${arr.length>2?`<span class="text-xs text-gray-400">+${arr.length-2}</span>`:''}</div>`;
+    }
     const fullText = arr.join(' / ');
     return `<div class="max-w-[260px] overflow-hidden whitespace-nowrap text-ellipsis" title="${P._ledgerAttr(fullText)}">${H.esc(fullText)}</div>`;
   }
@@ -10838,6 +11538,13 @@ P._ledgerDisplay = (record, field, opts={}) => {
         : 'bg-green-50 text-green-700 border-green-200';
       return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium border ${cls}">${H.esc(text)}</span>`;
     }
+    if(field.key === 'userLevel') {
+      const cls = text === '核心用户' ? 'bg-violet-50 text-violet-700 border-violet-200'
+        : text === '潜力用户' ? 'bg-blue-50 text-blue-700 border-blue-200'
+        : 'bg-gray-50 text-gray-600 border-gray-200';
+      return `<span class="inline-flex items-center px-2 py-0.5 whitespace-nowrap rounded-full text-xs font-medium border ${cls}">${H.esc(text)}</span>`;
+    }
+    if(field.key === 'betaStatus') return P._ledgerBadge(text);
     return P._ledgerBadge(value);
   }
   const text = String(value || '').trim();
@@ -10855,7 +11562,8 @@ P._ledgerGetFilters = (type) => {
 
 P._ledgerHasActiveFilters = (type) => {
   const filters = P._ledgerGetFilters(type);
-  return !!(P._ledgerSearch || Object.values(filters).some(v => String(v || '').trim()));
+  const hasProfileView = type === 'userProfile' && P._userProfileView !== 'all';
+  return !!(hasProfileView || P._ledgerSearch || Object.values(filters).some(v => String(v || '').trim()));
 };
 
 P._ledgerFiltered = (type, data) => {
@@ -10863,6 +11571,7 @@ P._ledgerFiltered = (type, data) => {
   const search = String(P._ledgerSearch || '').trim().toLowerCase();
   const filters = P._ledgerGetFilters(type);
   return (data[type] || []).filter(record => {
+    if(type === 'userProfile' && !P._userProfileViewMatches(record)) return false;
     if(search && !JSON.stringify(record).toLowerCase().includes(search)) return false;
     for(const [key, selected] of Object.entries(filters)) {
       if(!selected) continue;
@@ -10896,14 +11605,18 @@ P._ledgerSummary = (type, records) => {
     thirdValue = records.reduce((s,r)=>s+P._ledgerNumber(r[cfg.sumField]),0);
     thirdLabel = cfg.sumLabel;
   }
+  const pendingFollow = type === 'feedback'
+    ? records.filter(r => String(r.followStatus || '') === '待跟进').length
+    : 0;
   const latest = records.slice().sort((a,b)=>String(b.updatedAt||b.createdAt||'').localeCompare(String(a.updatedAt||a.createdAt||'')))[0];
-  return {total:records.length, thisMonth, thirdValue, thirdLabel, latest:latest?.updatedAt || latest?.createdAt || ''};
+  return {total:records.length, thisMonth, pendingFollow, thirdValue, thirdLabel, latest:latest?.updatedAt || latest?.createdAt || ''};
 };
 
 
 // ===== 运营台账 Excel 导入 / 导出 =====
-// 导入与导出都严格使用 cfg.columns：字段顺序与当前列表保持一致，不包含“序号”和“操作”。
-P._ledgerExportFields = (cfg) => (cfg.columns || []).map(key => P._ledgerField(cfg,key));
+// 导出可按模块单独配置字段；导入仍可识别完整字段，避免精简导出后影响历史数据回填。
+P._ledgerExportFields = (cfg) => (cfg.exportColumns || cfg.columns || []).map(key => P._ledgerField(cfg,key)).filter(Boolean);
+P._ledgerImportFields = (cfg) => (cfg.importColumns || cfg.exportColumns || cfg.columns || []).map(key => P._ledgerField(cfg,key)).filter(Boolean);
 P._ledgerNormalizeHeader = (value) => String(value ?? '')
   .replace(/\uFEFF/g,'')
   .replace(/\s+/g,'')
@@ -10945,7 +11658,22 @@ P._exportLedgerExcel = (type) => {
   }
   const data = P._ledgerLoad();
   // 有筛选时导出当前筛选结果；无筛选时导出当前分类全部记录。
-  const records = P._ledgerHasActiveFilters(type) ? P._ledgerFiltered(type, data) : (data[type] || []);
+  let records = P._ledgerHasActiveFilters(type) ? P._ledgerFiltered(type, data) : (data[type] || []);
+  // 用户分层按加入时间倒序导出：最近加入的用户排在最前面；同日记录保持较新的更新在前。
+  if(type === 'userProfile') {
+    const dateValue = (value) => {
+      const raw = H.parseDate(value) || String(value || '').trim();
+      if(!raw) return 0;
+      const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw) ? `${raw}T00:00:00` : raw;
+      const ts = new Date(normalized).getTime();
+      return Number.isFinite(ts) ? ts : 0;
+    };
+    records = records.slice().sort((a,b) => {
+      const byJoinDate = dateValue(b.date) - dateValue(a.date);
+      if(byJoinDate) return byJoinDate;
+      return dateValue(b.updatedAt || b.createdAt) - dateValue(a.updatedAt || a.createdAt);
+    });
+  }
   const fields = P._ledgerExportFields(cfg);
   const rows = [fields.map(field=>field.label)];
   records.forEach(record => rows.push(fields.map(field=>P._ledgerExportValue(record,field))));
@@ -10962,7 +11690,7 @@ P._exportLedgerExcel = (type) => {
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, String(cfg.shortLabel || '运营台账').slice(0,31));
   const suffix = P._ledgerHasActiveFilters(type) ? '_筛选结果' : '';
-  XLSX.writeFile(wb, `${cfg.shortLabel}台账${suffix}_${H.today()}.xlsx`);
+  XLSX.writeFile(wb, `${cfg.shortLabel}${suffix}_${H.today()}.xlsx`);
   UI.toast(records.length ? `已导出 ${records.length} 条${cfg.shortLabel}记录` : '已导出空白表格模板');
   try { window.Auth?.log?.('运营台账', '导出表格', cfg.label, `${records.length}条`).catch(()=>{}); } catch(_) {}
 };
@@ -10987,12 +11715,19 @@ P._importLedgerExcel = (type) => {
       const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:true});
       if(!rows.length) throw new Error('表格中没有可导入的数据');
 
-      const fields = P._ledgerExportFields(cfg);
+      const fields = P._ledgerImportFields(cfg);
       const aliases = {
+        date:['加入日期','加入时间','日期'],
         userTags:['用户标签','自驾类型'],
         vehicleType:['车辆类型','油车/新能源车','能源类型'],
         vehicleModel:['具体车型','车型'],
-        betaEligibility:['内测资格','内测用户'],
+        betaEligibility:['内测资格','内测用户','是否具备内测资格'],
+        betaStatus:['内测状态','用户状态'],
+        betaJoinDate:['加入内测日期','内测加入日期'],
+        betaExitDate:['退出日期','退群日期'],
+        lastActiveAt:['最近活跃','最近活跃日期'],
+        keyUser:['重点用户','是否重点用户'],
+        acquisitionCost:['投放花费','获客成本'],
         feedbackType:['反馈类型','问题类型'],
         followStatus:['跟进状态','闭环状态'],
         groupJoins:['引流进群人数','进群人数'],
@@ -11086,7 +11821,7 @@ P._openLedgerBatchEdit = async (type) => {
   const cfg = P._ledgerTypes[type];
   const selected = P._ledgerSelected(type);
   if(!cfg || !selected.size) return;
-  const editableFields = cfg.fields.filter(field => !field.conditional);
+  const editableFields = cfg.fields.filter(field => !field.conditional && !field.computed);
   const html = `<div class="p-6">
     <h2 class="text-base font-semibold text-gray-900 mb-1">批量修改${H.esc(cfg.shortLabel)}</h2>
     <p class="text-sm text-gray-500 mb-5">已选中 ${selected.size} 条记录，请选择一个字段统一修改</p>
@@ -11109,13 +11844,14 @@ P._openLedgerBatchEdit = async (type) => {
       currentField = P._ledgerField(cfg,fieldEl.value);
       if(!fieldEl.value) { valueBox.innerHTML=''; saveBtn.disabled=true; return; }
       saveBtn.disabled=false;
+      const currentOptions = P._ledgerFieldOptions(currentField);
       if(currentField.type === 'multi') {
-        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><div class="flex flex-wrap gap-2 rounded-lg border border-gray-200 bg-white p-3">${(currentField.options||[]).map(option=>`<label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 cursor-pointer text-sm"><input type="checkbox" name="ledgerBatchMulti" value="${P._ledgerAttr(option)}" class="rounded border-gray-300 text-blue-600"><span>${H.esc(option)}</span></label>`).join('')}</div><p class="text-xs text-gray-400 mt-1">不勾选任何选项会清空该字段</p>`;
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><div class="flex flex-wrap gap-2 rounded-lg border border-gray-200 bg-white p-3">${currentOptions.map(option=>`<label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 cursor-pointer text-sm"><input type="checkbox" name="ledgerBatchMulti" value="${P._ledgerAttr(option)}" class="rounded border-gray-300 text-blue-600"><span>${H.esc(option)}</span></label>`).join('')}</div><p class="text-xs text-gray-400 mt-1">不勾选任何选项会清空该字段</p>`;
       } else if(currentField.type === 'contentSelect') {
         const titleOptions = P._ledgerContentTitleOptions();
         valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><select class="cos-select !pr-10" id="ledger-batch-input"><option value="">清空该字段</option>${titleOptions.map(option=>`<option value="${P._ledgerAttr(option)}">${H.esc(option)}</option>`).join('')}</select><p class="text-xs text-gray-400 mt-1.5">从「内容库」已有标题中选择</p>`;
       } else if(currentField.type === 'select') {
-        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><select class="cos-select !pr-10" id="ledger-batch-input"><option value="">清空该字段</option>${(currentField.options||[]).map(option=>`<option value="${P._ledgerAttr(option)}">${H.esc(option)}</option>`).join('')}</select>`;
+        valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><select class="cos-select !pr-10" id="ledger-batch-input"><option value="">清空该字段</option>${currentOptions.map(option=>`<option value="${P._ledgerAttr(option)}">${H.esc(option)}</option>`).join('')}</select>`;
       } else if(currentField.type === 'textarea') {
         valueBox.innerHTML = `<label class="cos-label">${H.esc(currentField.label)}</label><textarea class="cos-textarea" id="ledger-batch-input" placeholder="留空会清空该字段"></textarea>`;
       } else {
@@ -11168,11 +11904,12 @@ P._ledgerRenderField = (field, record={}) => {
   const required = field.required ? '<span class="text-red-500 ml-0.5">*</span>' : '';
   const span = field.full ? 'md:col-span-2' : '';
   const conditional = field.conditional === 'paid' ? ' data-ledger-paid-field' : '';
+  const fieldOptions = P._ledgerFieldOptions(field, {currentValue:value});
   if(field.type === 'multi') {
     const selected = Array.isArray(value) ? value : [];
     return `<div class="${span}"><label class="cos-label">${H.esc(field.label)}${required}</label>
       <div class="flex flex-wrap gap-2 rounded-lg border border-gray-200 bg-white p-3">
-        ${(field.options||[]).map(option=>`<label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-blue-50 cursor-pointer text-sm">
+        ${fieldOptions.map(option=>`<label class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-blue-50 cursor-pointer text-sm">
           <input type="checkbox" name="${P._ledgerAttr(field.key)}" value="${P._ledgerAttr(option)}" ${selected.includes(option)?'checked':''} class="rounded border-gray-300 text-blue-600">
           <span>${H.esc(option)}</span>
         </label>`).join('')}
@@ -11187,7 +11924,7 @@ P._ledgerRenderField = (field, record={}) => {
       ${options.map(option=>`<option value="${P._ledgerAttr(option)}" ${String(value)===String(option)?'selected':''}>${H.esc(option)}</option>`).join('')}
     </select><p class="text-xs text-gray-400 mt-1.5">标题来源于「内容库」，按最新发布时间优先展示</p>`;
   } else if(field.type === 'select') {
-    control = `<select class="cos-select" name="${P._ledgerAttr(field.key)}"><option value="">请选择</option>${(field.options||[]).map(option=>`<option value="${P._ledgerAttr(option)}" ${String(value)===String(option)?'selected':''}>${H.esc(option)}</option>`).join('')}</select>`;
+    control = `<select class="cos-select" name="${P._ledgerAttr(field.key)}"><option value="">请选择</option>${fieldOptions.map(option=>`<option value="${P._ledgerAttr(option)}" ${String(value)===String(option)?'selected':''}>${H.esc(option)}</option>`).join('')}</select>`;
   } else if(field.type === 'textarea') {
     control = `<textarea class="cos-textarea" name="${P._ledgerAttr(field.key)}" placeholder="${P._ledgerAttr(field.placeholder||'')}">${H.esc(value||'')}</textarea>`;
   } else {
@@ -11201,11 +11938,29 @@ P._openLedgerModal = async (type, id=null) => {
   const data = P._ledgerLoad();
   const old = id ? (data[type] || []).find(r => r.id === id) : null;
   const title = old ? `编辑${cfg.label}` : `新增${cfg.label}`;
+  const editableFields = cfg.fields.filter(field=>!field.computed);
+  let fieldsHtml = editableFields.map(field=>P._ledgerRenderField(field, old||{})).join('');
+  let formClass = 'grid grid-cols-1 md:grid-cols-2 gap-4';
+  if(type === 'userProfile') {
+    const groups = [
+      ['基础信息',['date','userNickname','contactInfo','occupation']],
+      ['用户画像',['sourceChannel','userTags','vehicleType','vehicleModel','userLevel','keyUser']],
+      ['活跃数据',['activity','feedbackCount','lastActiveAt']],
+      ['内测信息',['betaStatus','betaEligibility','betaJoinDate','betaExitDate','device','acquisitionCost','exitReason']],
+      ['运营备注',['notes']]
+    ];
+    const map = new Map(editableFields.map(field=>[field.key,field]));
+    fieldsHtml = groups.map(([groupTitle,keys])=>`<section>
+      <div class="text-sm font-semibold text-gray-900 mb-3">${H.esc(groupTitle)}</div>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">${keys.map(key=>map.get(key)).filter(Boolean).map(field=>P._ledgerRenderField(field, old||{})).join('')}</div>
+    </section>`).join('');
+    formClass = 'space-y-6';
+  }
   const html = `<div class="p-6 pt-5">
     <h2>${H.esc(title)}</h2>
-    <form id="ledger-record-form" class="grid grid-cols-1 md:grid-cols-2 gap-4">
-      ${cfg.fields.map(field=>P._ledgerRenderField(field, old||{})).join('')}
-      <div class="md:col-span-2 flex justify-end gap-3 pt-3 border-t border-gray-100 mt-1">
+    <form id="ledger-record-form" class="${formClass}">
+      ${fieldsHtml}
+      <div class="flex justify-end gap-3 pt-4 border-t border-gray-100 mt-1">
         <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
         <button type="button" class="cos-btn cos-btn-primary" id="ledger-record-save">保存记录</button>
       </div>
@@ -11230,13 +11985,13 @@ P._openLedgerModal = async (type, id=null) => {
 
     if(saveBtn && form) saveBtn.onclick = () => {
       const raw = UI.readForm(form);
-      cfg.fields.filter(f=>f.type==='multi').forEach(f => {
+      editableFields.filter(f=>f.type==='multi').forEach(f => {
         raw[f.key] = [...form.querySelectorAll(`input[name="${f.key}"]:checked`)].map(el=>el.value);
       });
-      cfg.fields.filter(f=>f.type==='number').forEach(f => {
+      editableFields.filter(f=>f.type==='number').forEach(f => {
         raw[f.key] = raw[f.key] === '' ? '' : P._ledgerNumber(raw[f.key]);
       });
-      const missing = cfg.fields.find(f => {
+      const missing = editableFields.find(f => {
         if(!f.required) return false;
         const v = raw[f.key];
         return Array.isArray(v) ? !v.length : !String(v || '').trim();
@@ -11300,46 +12055,109 @@ P._openLedgerDrawer = (type, id) => {
   const data = P._ledgerLoad();
   const record = (data[type] || []).find(r => r.id === id);
   if(!record) return;
-  const mainTitle = type === 'feedback'
-    ? (record.details || record.userNickname || cfg.shortLabel)
-    : (record.userNickname || record.contentTitle || record.channelName || record.communityName || cfg.shortLabel);
-  const detailFields = type === 'feedback' ? cfg.fields.filter(field => field.key !== 'details') : cfg.fields;
-  const html = `<div class="p-6">
-    <div class="flex items-start justify-between gap-4 mb-5">
-      <div class="min-w-0">
-        <div class="flex items-center gap-2 mb-1"><span class="text-xl">${cfg.icon}</span><span class="cos-tag">${H.esc(cfg.shortLabel)}</span></div>
-        <h2 class="text-lg font-semibold text-gray-900 break-words whitespace-pre-wrap leading-7">${H.esc(mainTitle)}</h2>
-        <div class="text-xs text-gray-400 mt-1">更新于 ${record.updatedAt ? H.fmtDateTime(record.updatedAt) : '-'}</div>
+
+  if(type === 'userProfile') {
+    const status = P._userProfileStatus(record);
+    const vehicle = [record.vehicleType, record.vehicleModel].map(v=>String(v||'').trim()).filter(Boolean).join(' · ') || '-';
+    const detailValue = (fieldKey) => P._ledgerDisplay(record, P._ledgerField(cfg,fieldKey), {detail:true});
+    const row = (label, value) => `<div><div class="text-xs text-gray-400 mb-1.5">${H.esc(label)}</div><div class="text-sm text-gray-800 min-h-[22px] leading-6">${value}</div></div>`;
+    const section = (title, body) => `<section class="pt-6 mt-6 border-t border-gray-100"><div class="text-sm font-semibold text-gray-900 mb-4">${H.esc(title)}</div>${body}</section>`;
+    const cost = record.acquisitionCost === '' || record.acquisitionCost == null ? '-' : `¥${P._ledgerNumber(record.acquisitionCost).toLocaleString()}`;
+    const html = `<div class="p-6">
+      <div class="flex items-start justify-between gap-4 mb-2">
+        <div class="min-w-0 pr-2">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-lg font-semibold text-gray-900 break-words">${String(record.keyUser||'')==='是' || String(record.userLevel||'')==='核心用户' ? '⭐ ' : ''}${H.esc(record.userNickname || '-')}</h2>
+            ${P._ledgerBadge(status)}
+          </div>
+          <div class="text-xs text-gray-400 mt-1.5">更新于 ${record.updatedAt ? H.fmtDateTime(record.updatedAt) : '-'}</div>
+        </div>
+        <button class="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100" data-drawer-close>&times;</button>
       </div>
-      <button class="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100" data-drawer-close>&times;</button>
+      ${section('基础信息', `<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+        ${row('联系方式', detailValue('contactInfo'))}
+        ${row('职业', detailValue('occupation'))}
+        ${row('加入日期', detailValue('date'))}
+        ${row('来源渠道', detailValue('sourceChannel'))}
+      </div>`)}
+      ${section('用户画像', `<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+        <div class="sm:col-span-2">${row('用户标签', detailValue('userTags'))}</div>
+        ${row('车辆信息', H.esc(vehicle))}
+        ${row('用户等级', detailValue('userLevel'))}
+        ${row('重点用户', detailValue('keyUser'))}
+      </div>`)}
+      ${section('活跃数据', `<div class="grid grid-cols-1 sm:grid-cols-3 gap-x-6 gap-y-5">
+        ${row('活跃度', detailValue('activity'))}
+        ${row('反馈次数', detailValue('feedbackCount'))}
+        ${row('最近活跃', detailValue('lastActiveAt'))}
+      </div>`)}
+      ${section('内测信息', `<div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+        ${row('内测状态', P._ledgerBadge(status))}
+        ${row('是否具备内测资格', detailValue('betaEligibility'))}
+        ${row('加入内测日期', detailValue('betaJoinDate'))}
+        ${row('退出日期', detailValue('betaExitDate'))}
+        ${row('使用设备', detailValue('device'))}
+        ${row('投放花费', H.esc(cost))}
+        ${String(record.exitReason||'').trim()?`<div class="sm:col-span-2">${row('退出原因', detailValue('exitReason'))}</div>`:''}
+      </div>`)}
+      ${String(record.notes||'').trim()?section('运营备注', `<div class="rounded-2xl border border-gray-100 bg-gray-50/70 p-5 text-sm text-gray-700 leading-7 whitespace-pre-wrap break-words">${detailValue('notes')}</div>`):''}
+    </div>`;
+    UI.openDrawer(html);
+    return;
+  }
+
+  // 详情抽屉统一使用“核心内容”作为标题，不再重复显示分类图标和标签。
+  const titleFieldByType = {
+    feedback:'details',
+    cooperation:'channelName',
+    userProfile:'userNickname'
+  };
+  const titleFieldKey = titleFieldByType[type] || '';
+  const titleFallback = record.userNickname || record.contentTitle || record.channelName || record.communityName || cfg.shortLabel;
+  const mainTitle = record[titleFieldKey] || titleFallback;
+
+  // 普通字段使用双列信息布局；长文本单独做成记录卡片，便于阅读和复盘。
+  const basicFields = cfg.fields.filter(field => field.key !== titleFieldKey && field.type !== 'textarea');
+  const noteFields = cfg.fields.filter(field => field.key !== titleFieldKey && field.type === 'textarea' && String(record[field.key] || '').trim());
+
+  const html = `<div class="p-6">
+    <div class="flex items-start justify-between gap-4 mb-6">
+      <div class="min-w-0 pr-2">
+        <h2 class="text-lg font-semibold text-gray-900 break-words whitespace-pre-wrap leading-7">${H.esc(mainTitle || '-')}</h2>
+        <div class="text-xs text-gray-400 mt-1.5">更新于 ${record.updatedAt ? H.fmtDateTime(record.updatedAt) : '-'}</div>
+      </div>
+      <button class="w-8 h-8 shrink-0 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100" data-drawer-close>&times;</button>
     </div>
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-5 gap-y-4">
-      ${detailFields.map(field=>`<div class="${field.full?'sm:col-span-2':''}">
-        <div class="text-xs text-gray-400 mb-1">${H.esc(field.label)}</div>
-        <div class="text-sm text-gray-800 min-h-[22px]">${P._ledgerDisplay(record, field, {detail:true})}</div>
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-5">
+      ${basicFields.map(field=>`<div class="${field.full?'sm:col-span-2':''}">
+        <div class="text-xs text-gray-400 mb-1.5">${H.esc(field.label)}</div>
+        <div class="text-sm text-gray-800 min-h-[22px] leading-6">${P._ledgerDisplay(record, field, {detail:true})}</div>
       </div>`).join('')}
     </div>
-    <div class="flex justify-end gap-3 mt-8 pt-5 border-t border-gray-100">
-      <button class="cos-btn cos-btn-danger" data-ledger-drawer-delete="${H.esc(id)}">删除</button>
-      <button class="cos-btn cos-btn-primary" data-ledger-drawer-edit="${H.esc(id)}">编辑记录</button>
-    </div>
+
+    ${noteFields.length ? `<div class="mt-7 pt-6 border-t border-gray-100 space-y-5">
+      ${noteFields.map(field=>`<section>
+        <div class="text-sm font-semibold text-gray-900 mb-2.5">${H.esc(field.label)}</div>
+        <div class="rounded-2xl border border-gray-100 bg-gray-50/70 p-5">
+          <div class="text-sm text-gray-700 leading-7 whitespace-pre-wrap break-words">${P._ledgerDisplay(record, field, {detail:true})}</div>
+        </div>
+      </section>`).join('')}
+    </div>` : ''}
   </div>`;
   UI.openDrawer(html);
-  const box = document.getElementById('drawer-box');
-  const edit = box.querySelector('[data-ledger-drawer-edit]');
-  const del = box.querySelector('[data-ledger-drawer-delete]');
-  if(edit) edit.onclick = () => { UI.closeDrawer(); P._openLedgerModal(type, id); };
-  if(del) del.onclick = () => P._deleteLedgerRecord(type, id);
 };
 
 P.renderLedgers = () => {
   const type = P._ledgerTypes[P._ledgerType] ? P._ledgerType : 'feedback';
   P._ledgerType = type;
   const cfg = P._ledgerTypes[type];
-  const data = P._ledgerLoad();
+  let data = P._ledgerLoad();
+  if(type === 'userProfile') data = P._ledgerPrepareUserProfiles(data);
   const allRecords = data[type] || [];
   const filtered = P._ledgerFiltered(type, data);
   const summary = P._ledgerSummary(type, allRecords);
+  const profileStats = type === 'userProfile' ? P._userProfileStats(allRecords) : null;
   const selected = P._ledgerSelected(type);
   const validIds = new Set(allRecords.map(record=>record.id));
   [...selected].forEach(id=>{ if(!validIds.has(id)) selected.delete(id); });
@@ -11352,38 +12170,57 @@ P.renderLedgers = () => {
   const activeFilters = P._ledgerGetFilters(type);
   const filterFields = (cfg.filterFields || []).map(key => P._ledgerField(cfg,key)).filter(Boolean);
 
+  // 当前台账名称作为页面唯一主标题，避免“运营台账 / 分类 / 当前台账”三层标题重复。
+  P._setHeader(cfg.label, cfg.description);
+  document.getElementById('page-actions').innerHTML = `
+    <button class="cos-btn cos-btn-primary" id="ledger-add-btn">＋ 新增记录</button>
+    <button class="cos-btn cos-btn-secondary" id="ledger-import-btn" title="按照当前列表字段顺序导入">📥 导入表格</button>
+    <button class="cos-btn cos-btn-secondary" id="ledger-export-btn" title="按当前模块的导出字段生成表格">📤 导出表格</button>`;
+
   let html = `
-    <div class="cos-card p-2 mb-5 overflow-x-auto">
-      <div class="flex min-w-max gap-1">
-        ${Object.entries(P._ledgerTypes).map(([key,item])=>`<button class="px-4 py-2.5 rounded-lg text-sm font-medium transition-colors ${key===type?'bg-blue-600 text-white shadow-sm':'text-gray-600 hover:bg-gray-100'}" data-ledger-type="${key}">
-          <span class="mr-1.5">${item.icon}</span>${H.esc(item.shortLabel)}
+    <div class="cos-card px-4 mb-5 overflow-x-auto">
+      <div class="flex min-w-max gap-6 border-b border-gray-100">
+        ${Object.entries(P._ledgerTypes).map(([key,item])=>`<button class="relative px-1 py-3.5 text-sm font-medium transition-colors ${key===type?'text-blue-600':'text-gray-500 hover:text-gray-800'}" data-ledger-type="${key}">
+          ${H.esc(item.shortLabel)}
+          ${key===type?'<span class="absolute left-0 right-0 -bottom-px h-0.5 rounded-full bg-blue-600"></span>':''}
         </button>`).join('')}
       </div>
     </div>
 
-    <div class="flex items-start justify-between gap-4 mb-5">
-      <div><h2 class="text-lg font-semibold text-gray-900">${cfg.icon} ${H.esc(cfg.label)}</h2><p class="text-sm text-gray-500 mt-1">${H.esc(cfg.description)}</p></div>
-      <div class="flex items-center gap-2 shrink-0">
-        <button class="cos-btn cos-btn-primary" id="ledger-add-btn">＋ 新增记录</button>
-        <button class="cos-btn cos-btn-secondary" id="ledger-import-btn" title="按照当前列表字段顺序导入">📥 导入表格</button>
-        <button class="cos-btn cos-btn-secondary" id="ledger-export-btn" title="字段顺序与当前列表一致">📤 导出表格</button>
-      </div>
-    </div>
+    ${type === 'userProfile' ? `<div class="flex flex-wrap items-center gap-2 mb-4">
+      ${[
+        ['all','全部用户',profileStats.total],
+        ['beta','内测用户',profileStats.beta],
+        ['exited','已退出',profileStats.exited],
+        ['active','高活跃',profileStats.high],
+        ['key','重点用户',profileStats.key]
+      ].map(([key,label,count])=>`<button class="cos-btn cos-btn-sm ${P._userProfileView===key?'cos-btn-primary':'cos-btn-secondary'}" data-user-profile-view="${key}">${label} ${count}</button>`).join('')}
+    </div>` : ''}
 
-    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
-      <div class="cos-card p-4"><div class="text-xs text-gray-400">记录总数</div><div class="text-2xl font-bold text-gray-900 mt-1">${summary.total}</div></div>
-      <div class="cos-card p-4"><div class="text-xs text-gray-400">本月新增</div><div class="text-2xl font-bold text-blue-600 mt-1">${summary.thisMonth}</div></div>
-      <div class="cos-card p-4"><div class="text-xs text-gray-400">${H.esc(summary.thirdLabel)}</div><div class="text-2xl font-bold text-green-600 mt-1">${H.fmtNum(summary.thirdValue)}</div></div>
-      <div class="cos-card p-4"><div class="text-xs text-gray-400">最近更新</div><div class="text-sm font-semibold text-gray-700 mt-2">${summary.latest ? H.fmtDateTime(summary.latest) : '-'}</div></div>
+    <div class="grid grid-cols-1 ${type==='userProfile'?'sm:grid-cols-4':'sm:grid-cols-3'} gap-3 mb-5">
+      ${type === 'userProfile' ? `
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">总用户数</div><div class="text-2xl font-bold text-gray-900 mt-1">${profileStats.total}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">近 30 天活跃</div><div class="text-2xl font-bold text-green-600 mt-1">${profileStats.active30}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">本月新增</div><div class="text-2xl font-bold text-blue-600 mt-1">${profileStats.thisMonth}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">当前内测</div><div class="text-2xl font-bold text-violet-600 mt-1">${profileStats.beta}</div></div>
+      ` : type === 'feedback' ? `
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">本月新增</div><div class="text-2xl font-bold text-blue-600 mt-1">${summary.thisMonth}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">待跟进</div><div class="text-2xl font-bold text-amber-500 mt-1">${summary.pendingFollow}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">已闭环</div><div class="text-2xl font-bold text-green-600 mt-1">${H.fmtNum(summary.thirdValue)}</div></div>
+      ` : `
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">记录总数</div><div class="text-2xl font-bold text-gray-900 mt-1">${summary.total}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">本月新增</div><div class="text-2xl font-bold text-blue-600 mt-1">${summary.thisMonth}</div></div>
+        <div class="cos-card p-4"><div class="text-xs text-gray-400">${H.esc(summary.thirdLabel)}</div><div class="text-2xl font-bold text-green-600 mt-1">${H.fmtNum(summary.thirdValue)}</div></div>
+      `}
     </div>
 
     <div class="cos-card p-4 mb-4">
       <div class="flex flex-wrap items-center gap-3">
         <div class="relative flex-1 min-w-[240px] max-w-[360px]">
-          <input id="ledger-search" class="cos-input pl-8" value="${P._ledgerAttr(P._ledgerSearch)}" placeholder="${H.esc(cfg.searchPlaceholder || '搜索当前台账')}">
+          <input id="ledger-search" class="cos-input pl-8" value="${P._ledgerAttr(P._ledgerSearch)}" placeholder="${H.esc(cfg.searchPlaceholder || '搜索当前数据')}">
           <span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-sm">🔍</span>
         </div>
-        ${filterFields.map(field=>`<select class="cos-select !w-auto min-w-[130px] !pr-10" data-ledger-filter="${H.esc(field.key)}"><option value="">${H.esc(field.label.replace(/（.*?）/g,''))}</option>${(field.options||[]).map(o=>`<option value="${H.esc(o)}" ${String(activeFilters[field.key]||'')===String(o)?'selected':''}>${H.esc(o)}</option>`).join('')}</select>`).join('')}
+        ${filterFields.map(field=>{ const options=P._ledgerFieldOptions(field,{includeUsed:true}); return `<select class="cos-select !w-auto min-w-[130px] !pr-10" data-ledger-filter="${H.esc(field.key)}"><option value="">${H.esc(field.label.replace(/（.*?）/g,''))}</option>${options.map(o=>`<option value="${H.esc(o)}" ${String(activeFilters[field.key]||'')===String(o)?'selected':''}>${H.esc(o)}</option>`).join('')}</select>`; }).join('')}
         ${P._ledgerHasActiveFilters(type) ? '<button class="cos-btn cos-btn-secondary" id="ledger-clear-filter">清空筛选</button>' : ''}
       </div>
     </div>`;
@@ -11403,12 +12240,13 @@ P.renderLedgers = () => {
   html += '<div class="cos-card overflow-hidden">';
   // 无论是否已有数据，都展示完整字段表头。序号和操作只用于页面，不进入导入/导出文件。
   html += '<div class="overflow-x-auto"><table class="cos-table min-w-max"><thead><tr>';
-  html += '<th class="text-center" style="width:42px"><input type="checkbox" id="ledger-select-page" title="全选本页"></th><th style="width:60px;text-align:left;padding-left:16px">序号</th>';
+  html += '<th class="text-center" style="width:42px"><input type="checkbox" id="ledger-select-page" title="全选本页"></th>';
+  if(!cfg.hideSequence) html += '<th style="width:60px;text-align:left;padding-left:16px">序号</th>';
   cfg.columns.forEach(key => { html += `<th>${H.esc(P._ledgerField(cfg,key).label)}</th>`; });
   html += '<th>操作</th></tr></thead><tbody>';
   if(!pageItems.length) {
     const emptyText = filtered.length === 0 && allRecords.length ? '没有符合筛选条件的记录' : `暂无${H.esc(cfg.shortLabel)}记录`;
-    const colspan = cfg.columns.length + 3;
+    const colspan = cfg.columns.length + (cfg.hideSequence ? 2 : 3);
     html += `<tr><td colspan="${colspan}" class="py-14 text-center"><div class="text-gray-400 text-sm">${emptyText}</div></td></tr>`;
   } else {
     pageItems.forEach((record,index) => {
@@ -11416,7 +12254,7 @@ P.renderLedgers = () => {
       const seq = pageStart + index + 1;
       html += `<tr class="cursor-pointer hover:bg-blue-50/40" data-ledger-view="${H.esc(record.id)}">`;
       html += `<td class="text-center"><input type="checkbox" class="ledger-select-cb" data-ledger-id="${H.esc(record.id)}"${checked}></td>`;
-      html += `<td class="text-xs text-gray-400" style="text-align:left;padding-left:16px">${seq}</td>`;
+      if(!cfg.hideSequence) html += `<td class="text-xs text-gray-400" style="text-align:left;padding-left:16px">${seq}</td>`;
       cfg.columns.forEach(key => { const field=P._ledgerField(cfg,key); html += `<td class="align-top">${P._ledgerDisplay(record,field)}</td>`; });
       html += `<td class="whitespace-nowrap"><div class="flex gap-0.5">
         <button class="cos-btn cos-btn-ghost cos-btn-xs" data-ledger-edit="${H.esc(record.id)}" title="编辑">✏️</button>
@@ -11451,6 +12289,12 @@ P.renderLedgers = () => {
     P._ledgerSetPage(P._ledgerType,1);
     P.renderLedgers();
   });
+  document.querySelectorAll('[data-user-profile-view]').forEach(btn => btn.onclick = () => {
+    P._userProfileView = btn.dataset.userProfileView || 'all';
+    P._ledgerSetPage('userProfile',1);
+    P._ledgerSelected('userProfile').clear();
+    P.renderLedgers();
+  });
   const add = document.getElementById('ledger-add-btn');
   if(add) add.onclick = () => P._openLedgerModal(type);
   const importBtn = document.getElementById('ledger-import-btn');
@@ -11478,6 +12322,7 @@ P.renderLedgers = () => {
     P._ledgerSearch='';
     P._ledgerMonth='';
     P._ledgerStatus='';
+    if(type === 'userProfile') P._userProfileView = 'all';
     P._ledgerFiltersByType[type] = {};
     P._ledgerSetPage(type,1);
     P.renderLedgers();
@@ -11524,7 +12369,7 @@ P.renderLedgers = () => {
 };
 
 P.routes.ledgers = () => {
-  P._setHeader('运营台账', '用户、内容、社群与渠道数据统一记录');
+  // 标题与说明由当前台账动态决定。
   P.renderLedgers();
 };
 
@@ -11956,9 +12801,15 @@ R.initSidebar = () => {
 
   // 绑定点击
   nav.querySelectorAll('[data-route]').forEach(el => {
-    el.addEventListener('click', () => R.navigate(el.dataset.route));
+    el.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const route = event.currentTarget?.dataset?.route || '';
+      if(route) R.navigate(route);
+    });
   });
   if(window.Auth && Auth.updateIndicator) Auth.updateIndicator();
+  if(R.currentRoute) R.syncActiveNav(R.currentRoute);
 };
 
 // --- 导航 ---
@@ -11967,10 +12818,17 @@ R._routeToNav = {
   inspirations:'inspirations',
   topics:'topics', contents:'contents', calendar:'calendar', channels:'channels',
   'content-center':'topics',
-  analytics:'analytics', users:'users', knowledge:'knowledge', loginManage:'loginManage',
+  analytics:'analytics', users:'ledgers', ledgers:'ledgers', loginManage:'loginManage',
   backups:'settings', settings:'settings', data:'settings',
 };
-R.navigate = (route) => {
+R.syncActiveNav = (route) => {
+  document.querySelectorAll('.sidebar-nav-item').forEach(el => el.classList.remove('active'));
+  const navKey = R._routeToNav[route] || route;
+  const active = document.getElementById('nav-' + navKey);
+  if(active) active.classList.add('active');
+};
+
+R.navigate = (route, options={}) => {
   const P = window.P;
 
   if(!P || !P.routes) {
@@ -11981,17 +12839,20 @@ R.navigate = (route) => {
     return;
   }
 
+  route = String(route || '').replace(/^#/, '');
   if(!P.routes[route]) route = 'workbench';
+  if(route === 'loginManage' && !(window.Auth && Auth.isAdmin && Auth.isAdmin())) route = 'settings';
+
   R.currentRoute = route;
-  window.location.hash = route;
+  const targetHash = '#' + route;
+  if(window.location.hash !== targetHash) {
+    if(options.replace) history.replaceState({route}, '', targetHash);
+    else history.pushState({route}, '', targetHash);
+  }
 
-  // 更新侧边栏 active
-  document.querySelectorAll('.sidebar-nav-item').forEach(el => el.classList.remove('active'));
-  const navKey = R._routeToNav[route] || route;
-  const active = document.getElementById('nav-' + navKey);
-  if(active) active.classList.add('active');
+  R.syncActiveNav(route);
 
-  // 渲染页面
+  // 渲染页面。使用 History API，避免相邻菜单快速切换时旧 hashchange 把“系统设置”误切回“登录管理”。
   if(P.routes[route]) {
     try {
       P.routes[route]();
@@ -12007,13 +12868,13 @@ R.navigate = (route) => {
   }
 };
 
-// --- 监听 hash 变化 ---
+// --- 监听浏览器前进/后退 ---
 R.init = () => {
   const hash = window.location.hash.replace('#','') || 'workbench';
-  R.navigate(hash);
-  window.addEventListener('hashchange', () => {
-    const newHash = window.location.hash.replace('#','') || 'workbench';
-    if(newHash !== R.currentRoute) R.navigate(newHash);
+  R.navigate(hash, {replace:true});
+  window.addEventListener('popstate', () => {
+    const newRoute = window.location.hash.replace('#','') || 'workbench';
+    if(newRoute !== R.currentRoute) R.navigate(newRoute, {replace:true});
   });
 };
 
