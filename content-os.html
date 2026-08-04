@@ -4,7 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>漫游心迹运营后台</title>
+<!-- 2026-08-04: 启动改为侧边栏按需懒加载；首次只加载当前栏目，切换栏目再加载对应数据并复用缓存 -->
+<!-- 2026-08-04: 新增账号管理；管理手机卡与小红书/抖音小号，发布内容时按平台选择对应账号 -->
 <!-- 2026-07-28: 图片大图预览改为适配屏幕可视区域；保留完整比例显示 -->
+<!-- 2026-08-04: 发布账号改为纯下拉选择，移除手动输入，并要求从账号管理中选择已登记账号 -->
 <!-- 2026-07-30: 新增内容审核流程；审核通过后才进入内容日历和内容库；支持配置审核权限与填写驳回原因 -->
 <!-- 2026-07-30: 选题库仅展示待做/待审核/审核驳回；废弃内容从看板、列表和日历隐藏 -->
 <!-- 2026-07-30: 删除图片/视频/整条内容时同步清理 images 存储桶；待审核内容支持提交人撤销并重新编辑 -->
@@ -1896,8 +1899,11 @@ S._lastBackupReminder = null;
 S._lastBurstWarning = 0;
 
 S.checkDailyReminder = async () => {
+  // 懒加载模式下，业务表未全部加载前不能生成快照，否则会把空数组误当成完整备份。
+  const coreReady = ['inspirations','topics','contents','users'].every(name => S.isModuleLoaded?.(name));
+  if(!coreReady) return;
   const today = H.today();
-  // 每日快照（凌晨首次打开时自动创建）
+  // 每日快照（完整业务数据首次加载后自动创建）
   if(S._lastDailySnapshot !== today) {
     S._lastDailySnapshot = today;
     await S._doBackup('每日快照');
@@ -2189,6 +2195,230 @@ S.load = async (onProgress) => {
       : `共加载 ${total} 条数据`
   });
   return { success:errors.length===0, total, errors, contentStatus:{...S._loadStatus.contents} };
+};
+
+
+// ============ 按侧边栏模块懒加载 ============
+// 页面启动时只建立空数据结构；进入某个侧边栏栏目时，再加载该栏目真正需要的数据。
+// 已成功加载的模块会保留在内存中，后续切换回来不会重复请求。
+S._moduleLabels = {
+  config:'系统配置', inspirations:'灵感池', topics:'选题库', contents:'内容库与日历', users:'用户数据'
+};
+S._moduleState = {};
+S._modulePromises = {};
+['config','inspirations','topics','contents','users'].forEach(name => {
+  S._moduleState[name] = {status:'idle', fromCache:false, error:'', count:0, lastLoadedAt:''};
+});
+
+S.initLazy = async () => {
+  S.db = S.emptyDB();
+  // emptyDB 中没有的历史集合也先补齐，保证尚未加载时页面读取不会报错。
+  for(const key of ['users','knowledge','competitors','templates']) {
+    if(!Array.isArray(S.db[key])) S.db[key] = [];
+  }
+  if(!S.db.config || typeof S.db.config !== 'object') S.db.config = {};
+  S._migrate();
+  await S._ensureCacheReady();
+  S._updateIndicator();
+  return S.db;
+};
+
+S.isModuleLoaded = (name) => ['success','cached'].includes(S._moduleState?.[name]?.status);
+
+S._readModuleCache = async (name) => {
+  try {
+    const rows = await S._idb.getAll(name);
+    if(name === 'config') {
+      const cfg = {};
+      (rows || []).forEach(row => {
+        if(row && row.key != null) cfg[row.key] = row.value;
+      });
+      return cfg;
+    }
+    return Array.isArray(rows) ? rows : [];
+  } catch(e) {
+    console.warn(`⚠️ [LAZY CACHE] 读取 ${name} 缓存失败：`, e?.message || e);
+    return name === 'config' ? {} : [];
+  }
+};
+
+S._writeModuleCache = async (name, value) => {
+  try {
+    if(name === 'config') {
+      const rows = Object.keys(value || {}).map(key => ({key, value:value[key]}));
+      await S._idb.putAll('config', rows);
+    } else {
+      await S._idb.putAll(name, Array.isArray(value) ? value : []);
+    }
+  } catch(e) {
+    console.warn(`⚠️ [LAZY CACHE] 写入 ${name} 缓存失败：`, e?.message || e);
+  }
+};
+
+S._assignLoadedModule = (name, raw, alreadyCamel=false) => {
+  if(name === 'config') {
+    const defaults = S.emptyDB().config;
+    const cfg = {...defaults};
+    if(Array.isArray(raw)) raw.forEach(row => { if(row?.key != null) cfg[row.key] = row.value; });
+    else if(raw && typeof raw === 'object') Object.assign(cfg, raw);
+    S.db.config = cfg;
+    return Object.keys(cfg).length;
+  }
+
+  let rows = Array.isArray(raw) ? raw : [];
+  if(!alreadyCamel) rows = rows.map(_toCamel2);
+  if(name === 'contents') rows = S._normalizeContentRows(rows);
+  S.db[name] = rows;
+  S._migrate();
+  return rows.length;
+};
+
+S.loadModule = async (name, onProgress, options={}) => {
+  name = String(name || '');
+  if(!S._moduleState[name]) throw new Error('未知数据模块：' + name);
+  const force = !!options.force;
+  const state = S._moduleState[name];
+  if(!force && ['success','cached'].includes(state.status)) return {...state, name};
+  if(!force && state.status === 'loading' && S._modulePromises[name]) return S._modulePromises[name];
+
+  const label = S._moduleLabels[name] || name;
+  const report = (payload={}) => {
+    try { if(typeof onProgress === 'function') onProgress({name, label, ...payload}); } catch(_) {}
+  };
+
+  const task = (async () => {
+    S._moduleState[name] = {...state, status:'loading', fromCache:false, error:''};
+    report({status:'loading', message:`正在加载${label}...`, detail:'仅请求当前栏目所需数据'});
+
+    try {
+      let raw;
+      if(name === 'contents') {
+        S._loadStatus.contents = {status:'loading', fromCache:false, error:'', count:0, lastLoadedAt:''};
+        raw = await S._fetchContentsPaged(progress => report({
+          status:'loading',
+          message:progress?.message || `正在加载${label}...`,
+          detail:progress?.detail || '内容较多，正在分批加载'
+        }));
+      } else if(name === 'config') {
+        const response = await window.CONTENT_OS_NETWORK.withRetry(
+          () => SUPABASE.from('config').select('*'),
+          {label:'系统配置数据', timeoutMs:12000, attempts:2}
+        );
+        if(response?.error) throw response.error;
+        raw = response?.data || [];
+      } else {
+        const response = await window.CONTENT_OS_NETWORK.withRetry(
+          () => SUPABASE.from(name).select('*'),
+          {label:`${label}数据`, timeoutMs:15000, attempts:2}
+        );
+        if(response?.error) throw response.error;
+        raw = response?.data || [];
+      }
+
+      const count = S._assignLoadedModule(name, raw, false);
+      const now = H.nowISO();
+      S._moduleState[name] = {status:'success', fromCache:false, error:'', count, lastLoadedAt:now};
+      if(name === 'contents') {
+        S._loadStatus.contents = {status:'success', fromCache:false, error:'', count, lastLoadedAt:now};
+      }
+      await S._writeModuleCache(name, name === 'config' ? S.db.config : S.db[name]);
+      S._updateIndicator();
+      report({status:'success', message:`${label}加载完成`, detail:`共 ${count} 条`});
+      return {...S._moduleState[name], name};
+    } catch(e) {
+      console.error(`❌ [LAZY LOAD] ${name}:`, e?.message || e);
+      const cached = await S._readModuleCache(name);
+      const hasCache = name === 'config'
+        ? cached && Object.keys(cached).length > 0
+        : Array.isArray(cached) && cached.length > 0;
+
+      if(hasCache) {
+        const count = S._assignLoadedModule(name, cached, true);
+        S._moduleState[name] = {
+          status:'cached', fromCache:true, error:e?.message || String(e), count, lastLoadedAt:''
+        };
+        if(name === 'contents') {
+          S._loadStatus.contents = {
+            status:'cached', fromCache:true, error:e?.message || String(e), count, lastLoadedAt:''
+          };
+        }
+        report({status:'cached', message:`${label}网络加载失败，已显示缓存`, detail:`缓存共 ${count} 条`});
+        return {...S._moduleState[name], name};
+      }
+
+      S._moduleState[name] = {
+        status:'error', fromCache:false, error:e?.message || String(e), count:0, lastLoadedAt:''
+      };
+      if(name === 'contents') {
+        S._loadStatus.contents = {
+          status:'error', fromCache:false, error:e?.message || String(e), count:0, lastLoadedAt:''
+        };
+      }
+      report({status:'error', message:`${label}加载失败`, detail:e?.message || String(e)});
+      throw e;
+    } finally {
+      delete S._modulePromises[name];
+    }
+  })();
+
+  S._modulePromises[name] = task;
+  return task;
+};
+
+S.modulesForRoute = (route) => {
+  route = String(route || '').replace(/^#/, '');
+  const common = ['config'];
+  const map = {
+    workbench:['config','topics'],
+    inspirations:['config','inspirations','topics'],
+    hotspots:['config'],
+    topics:['config','topics','inspirations'],
+    'content-center':['config','topics','inspirations'],
+    contents:['config','contents','topics'],
+    calendar:['config','contents','topics'],
+    channels:['config','contents','topics'],
+    analytics:['config','contents'],
+    users:['config','users'],
+    ledgers:['config','users'],
+    loginManage:['config'],
+    accountRegistry:['config'],
+    backups:['config','inspirations','topics','contents','users'],
+    data:['config','inspirations','topics','contents','users']
+  };
+  if(route === 'settings') {
+    const tab = window.P?._settingsTab || 'data';
+    if(tab === 'config' || tab === 'logs') return common;
+    if(tab === 'videoCleanup') return ['config','contents'];
+    return ['config','inspirations','topics','contents','users'];
+  }
+  return map[route] || common;
+};
+
+S.ensureRouteData = async (route, onProgress, options={}) => {
+  const modules = [...new Set(S.modulesForRoute(route))];
+  const results = [];
+  for(let i=0; i<modules.length; i++) {
+    const name = modules[i];
+    const label = S._moduleLabels[name] || name;
+    const result = await S.loadModule(name, state => {
+      try {
+        if(typeof onProgress === 'function') onProgress({
+          ...state,
+          index:i + 1,
+          total:modules.length,
+          progress:Math.round(((i + (state.status === 'success' || state.status === 'cached' ? 1 : 0.35)) / modules.length) * 100),
+          message:state.message || `正在加载${label}...`,
+          detail:state.detail || `当前栏目需要 ${modules.length} 个数据模块`
+        });
+      } catch(_) {}
+    }, options);
+    results.push(result);
+  }
+  // 当用户后续已陆续打开所有核心栏目时，再安全执行每日完整快照。
+  if(['inspirations','topics','contents','users'].every(name => S.isModuleLoaded(name))) {
+    S.checkDailyReminder().catch(e => console.warn('每日快照创建失败：', e?.message || e));
+  }
+  return results;
 };
 
 // --- 数据迁移 ---
@@ -2724,6 +2954,7 @@ S.reviewQueue = {
     publishDate: H.parseDate(data.publishDate) || data.publishDate || H.today(),
     publishTime: String(data.publishTime || '').trim(),
     accountType: String(data.accountType || '').trim(),
+    socialAccountId: String(data.socialAccountId || '').trim(),
     publishAccount: String(data.publishAccount || '').trim(),
     contentLink: String(data.contentLink || '').trim(),
     bodyText: String(data.bodyText || ''),
@@ -2842,6 +3073,8 @@ S.reviewQueue = {
 
 // --- 审核通过：选题 → 内容库与内容日历 ---
 S.publishTopic = async (topicId, publishData, auditMeta={}) => {
+  // 内容库不再随选题库一起加载；真正发布时再补加载，避免重复内容并保证写入后的本地列表完整。
+  if(!S.isModuleLoaded('contents')) await S.loadModule('contents');
   const topic = S.topics.get(topicId);
   if(!topic) { console.warn(`🔍 [DIAG] publishTopic 未找到 topic=${topicId}`); return null; }
   const existingContent = S.contents.all().find(c => c.topicId === topicId);
@@ -2871,8 +3104,8 @@ S.publishTopic = async (topicId, publishData, auditMeta={}) => {
     metrics: topic.parsedMetrics && Object.values(topic.parsedMetrics).some(v=>v>0) ? {
       exposure:0, likes:topic.parsedMetrics.likes||0, comments:topic.parsedMetrics.comments||0,
       favorites:topic.parsedMetrics.favorites||0, shares:topic.parsedMetrics.shares||0,
-      downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'', publisherId: publishData.publisherId||'', publisherName: publishData.publisherName||'', publisherEmail: publishData.publisherEmail||''
-    } : { exposure:0, likes:0, comments:0, favorites:0, shares:0, downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'', publisherId: publishData.publisherId||'', publisherName: publishData.publisherName||'', publisherEmail: publishData.publisherEmail||'' },
+      downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'', socialAccountId: publishData.socialAccountId||'', publisherId: publishData.publisherId||'', publisherName: publishData.publisherName||'', publisherEmail: publishData.publisherEmail||''
+    } : { exposure:0, likes:0, comments:0, favorites:0, shares:0, downloads:0, followerGrowth:0, adCost:0, dataUpdatedAt:null, recordDays:[], publishAccount: publishData.publishAccount||'', accountType: publishData.accountType||'', socialAccountId: publishData.socialAccountId||'', publisherId: publishData.publisherId||'', publisherName: publishData.publisherName||'', publisherEmail: publishData.publisherEmail||'' },
     rating: null,
     review: { why:'', result:'', successReasons:'', failureReasons:'', optimization:'', contentType: publishData.theme || topic.theme || '', privateInquiries:0, groupJoins:0, contentReview:'', publishVideos:H.normalizeVideoList(publishData.publishVideos), ...auditMeta },
     sourcePlatform: topic.sourcePlatform||'manual',
@@ -4698,7 +4931,8 @@ P._recentGrowthContents = (limit=5) => {
 P.renderWorkbench = () => {
   const rawHotspots = P._hotspotLoad ? P._hotspotLoad() : [];
   const hotspots = rawHotspots.map(h => P._hotspotEffective ? P._hotspotEffective(h) : h);
-  const contents = S.contents.all();
+  const contentsLoaded = !!S.isModuleLoaded?.('contents');
+  const contents = contentsLoaded ? S.contents.all() : [];
   const topics = S.topics.all();
   const today = H.today();
 
@@ -4715,8 +4949,8 @@ P.renderWorkbench = () => {
   const statCards = [
     {label:'值得跟进热点', value:worthHotspots.length, hint:'60分以上待判断', route:'hotspots', color:'text-emerald-600', dot:worthHotspots.length},
     {label:'待执行选题', value:pendingTopics.length, hint:'含待审核与审核驳回', route:'topics', color:'text-blue-600', dot:pendingTopics.length},
-    {label:'今日发布', value:todayPublish.length, hint:'发布时间为今天', route:'calendar', color:'text-purple-600', dot:todayPublish.length},
-    {label:'增长明显', value:growth.length, hint:'较上次观看量增长', route:'contents', color:'text-orange-500', dot:growth.length},
+    {label:'今日发布', value:contentsLoaded ? todayPublish.length : '—', hint:contentsLoaded ? '发布时间为今天' : '进入内容日历后加载', route:'calendar', color:'text-purple-600', dot:contentsLoaded ? todayPublish.length : 0},
+    {label:'增长明显', value:contentsLoaded ? growth.length : '—', hint:contentsLoaded ? '较上次观看量增长' : '进入内容库后加载', route:'contents', color:'text-orange-500', dot:contentsLoaded ? growth.length : 0},
   ];
 
   let html = `<div class="space-y-5">
@@ -4757,7 +4991,7 @@ P.renderWorkbench = () => {
           <div class="flex items-center gap-3 rounded-xl border border-gray-100 p-3">
             <div class="min-w-0 flex-1"><div class="text-sm font-semibold text-gray-900 truncate cursor-pointer" data-content-trend="${H.esc(c.id)}">${H.esc(c.title)}</div><div class="text-xs text-gray-400 mt-0.5">${H.esc(c.platform||'-')} · ${H.showDate(c.publishDate)}</div></div>
             <span class="diag-badge diag-ok">观看量 +${H.fmtNum(delta)}</span>
-          </div>`).join('') : '<div class="text-sm text-gray-400 py-6 text-center">暂无明显增长内容</div>'}</div>
+          </div>`).join('') : `<div class="text-sm text-gray-400 py-6 text-center">${contentsLoaded?'暂无明显增长内容':'内容数据将在进入内容库后加载'}</div>`}</div>
       </div>
 
       <div class="cos-card p-5">
@@ -4766,7 +5000,7 @@ P.renderWorkbench = () => {
           <div class="rounded-xl border border-gray-100 p-3">
             <div class="flex items-center gap-2"><div class="text-sm font-semibold text-gray-900 flex-1 truncate">${H.esc(c.title)}</div><span class="diag-badge ${d.level==='danger'?'diag-danger':'diag-warn'}">${H.esc(d.label)}</span></div>
             <div class="text-xs text-gray-500 mt-1">${H.esc(d.reason)}</div>
-          </div>`).join('') : '<div class="text-sm text-gray-400 py-6 text-center">暂无需要重点复盘的内容</div>'}</div>
+          </div>`).join('') : `<div class="text-sm text-gray-400 py-6 text-center">${contentsLoaded?'暂无需要重点复盘的内容':'内容数据将在进入内容库后加载'}</div>`}</div>
       </div>
     </div>
   </div>`;
@@ -6204,7 +6438,16 @@ P.renderTopics = (containerId) => {
       P.renderTopics();
     }
   });
-  document.querySelectorAll('[data-publish-topic]').forEach(b=>b.onclick=(e)=>{e.stopPropagation();P._openPublishModal(b.dataset.publishTopic);});
+  document.querySelectorAll('[data-publish-topic]').forEach(b=>b.onclick=async(e)=>{
+    e.stopPropagation();
+    try {
+      if(!S.isModuleLoaded('contents')) {
+        UI.toast('正在加载发布所需的内容数据...', 'info');
+        await S.loadModule('contents');
+      }
+      P._openPublishModal(b.dataset.publishTopic);
+    } catch(err) { UI.toast(err?.message || '内容数据加载失败，暂时无法发布', 'error'); }
+  });
   document.querySelectorAll('[data-withdraw-review]').forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation();
     const topicId = b.dataset.withdrawReview;
@@ -6615,7 +6858,7 @@ P._openPublishModal = async (topicId) => {
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('账号类型','accountType','select',reviewDraft.accountType || '主体账号',P._accountTypes,'选择账号类型')}</div>
-          <div>${UI.renderField('发布账号','publishAccount','text',reviewDraft.publishAccount || '',null,'公司主体号 / 小号A')}</div>
+          <div>${P._renderSocialAccountPicker(autoPlatform, reviewDraft.socialAccountId || '', reviewDraft.publishAccount || '')}</div>
         </div>
         <div>${UI.renderField('内容链接','contentLink','url',autoLink,null,'https://...')}</div>
         <div>${UI.renderField('正文内容','bodyText','textarea',autoBody,null,'粘贴正文')}</div>
@@ -6634,6 +6877,7 @@ P._openPublishModal = async (topicId) => {
   // 在 modal 打开后绑定图片按钮
   setTimeout(()=>{
     UI.bindMediaFields(document.getElementById('publish-form'));
+    P._bindSocialAccountPicker(document.getElementById('publish-form'));
     const btnOrigText = isResubmitReview ? '重新提交审核' : '提交审核';
     document.getElementById('publish-save-btn').onclick = async () => {
       const btn = document.getElementById('publish-save-btn');
@@ -6646,6 +6890,7 @@ P._openPublishModal = async (topicId) => {
         if(UI.hasPendingMediaUploads(form)) { UI.toast('图片或视频仍在上传，请上传完成后再提交审核', 'warn'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         const data = UI.readForm(form);
         if(!data.platform) { UI.toast('请选择发布平台','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
+        if(!data.socialAccountId) { UI.toast('请选择发布账号','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         if(!data.theme) { UI.toast('请选择内容类型','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         UI.closeModal(data);
       } catch(e) {
@@ -8059,7 +8304,7 @@ P._openContentEditModal = async (contentId) => {
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>${UI.renderField('账号类型','accountType','select',P._contentAccountType(c)||'',P._accountTypes,'选择账号类型')}</div>
-          <div>${UI.renderField('发布账号','publishAccount','text',P._contentAccountName(c),null,'公司主体号 / 小号A')}</div>
+          <div>${P._renderSocialAccountPicker(c.platform || '', c.metrics?.socialAccountId || '', P._contentAccountName(c))}</div>
         </div>
         <div>${UI.renderField('评分','rating','select',c.rating||'',C.RATINGS,'未评分')}</div>
         <div class="border-t pt-3"><h3 class="text-sm font-semibold text-gray-700 mb-3">运营数据</h3></div>
@@ -8090,12 +8335,15 @@ P._openContentEditModal = async (contentId) => {
   const oldVideos = H.getPublishVideos(c);
   setTimeout(()=>{
     UI.bindMediaFields(document.getElementById('content-edit-form'));
+    P._bindSocialAccountPicker(document.getElementById('content-edit-form'));
     const saveBtn = document.getElementById('content-edit-save');
     if(saveBtn) saveBtn.onclick = () => {
       const form = document.getElementById('content-edit-form');
       if(!form) return;
       if(UI.hasPendingMediaUploads(form)) { UI.toast('图片或视频仍在上传，请上传完成后再保存', 'warn'); return; }
-      UI.closeModal(UI.readForm(form));
+      const data = UI.readForm(form);
+      if(!data.socialAccountId) { UI.toast('请选择发布账号','error'); return; }
+      UI.closeModal(data);
     };
   }, 50);
   const result = await modalPromise;
@@ -8117,6 +8365,7 @@ P._openContentEditModal = async (contentId) => {
     recordDays: c.metrics?.recordDays || [],
     publishAccount: String(data.publishAccount || '').trim(),
     accountType: data.accountType || '',
+    socialAccountId: String(data.socialAccountId || '').trim(),
     ...P._publisherFields(existingPublisher)
   };
   if(P._hasAnyMetricChange(c.metrics || {}, metrics)) {
@@ -8315,7 +8564,7 @@ P._openCalendarPublishModal = async (date, target) => {
       <div>${UI.renderField('发布时间','publishTime','time','')}</div>
       <div class="grid grid-cols-2 gap-4">
         <div>${UI.renderField('账号类型','accountType','select','主体账号',P._accountTypes,'选择账号类型')}</div>
-        <div>${UI.renderField('发布账号','publishAccount','text','',null,'公司主体号 / 小号A')}</div>
+        <div>${P._renderSocialAccountPicker('', '', '')}</div>
       </div>
       <div>${UI.renderField('封面图','coverImage','image','')}</div>
       <div>${UI.renderField('发布截图','publishScreenshot','images',[])}</div>
@@ -8330,6 +8579,7 @@ P._openCalendarPublishModal = async (date, target) => {
   const modalP = UI.openModal(html2);
   setTimeout(()=>{
     UI.bindMediaFields(document.getElementById('cal-publish-form'));
+    P._bindSocialAccountPicker(document.getElementById('cal-publish-form'));
     const topicSelect = document.getElementById('cal-topic-select');
     if(topicSelect) topicSelect.onchange = () => {
       const selectedTopic = topics.find(item => item.id === topicSelect.value);
@@ -8342,6 +8592,7 @@ P._openCalendarPublishModal = async (date, target) => {
       if(UI.hasPendingMediaUploads(form)) { UI.toast('图片或视频仍在上传，请上传完成后再发布', 'warn'); return; }
       const data=UI.readForm(form);
       if(!data.platform){UI.toast('请选择平台','error');return;}
+      if(!data.socialAccountId){UI.toast('请选择发布账号','error');return;}
       if(!data.theme){UI.toast('请选择内容类型','error');return;}
       const selectedTopic = topics.find(item => item.id === data.topicId);
       data.theme = data.theme || selectedTopic?.theme || '';
@@ -8816,7 +9067,17 @@ P.renderSettings = () => {
   document.getElementById('page-body').innerHTML = html;
 
   document.querySelectorAll('[data-settings-tab]').forEach(b=>{
-    b.onclick = () => { P._settingsTab = b.dataset.settingsTab; P.renderSettings(); };
+    b.onclick = async () => {
+      P._settingsTab = b.dataset.settingsTab;
+      const panel = document.getElementById('settings-panel');
+      if(panel) panel.innerHTML = '<div class="cos-card p-6 text-sm text-gray-500">正在加载当前设置项所需数据...</div>';
+      try {
+        await S.ensureRouteData('settings');
+        if(window.R?.currentRoute === 'settings' || ['data','backups'].includes(window.R?.currentRoute)) P.renderSettings();
+      } catch(e) {
+        if(panel) panel.innerHTML = '<div class="cos-card p-6 text-sm text-red-600">加载失败：'+H.esc(e?.message || String(e))+'</div>';
+      }
+    };
   });
 
   // 渲染当前 tab 内容
@@ -13309,6 +13570,319 @@ P._setHeader = (title, subtitle) => {
 })();
 </script>
 
+
+<!-- ======================================================================
+     Script 5.1: account-registry.js — 手机号与平台小号管理
+     ====================================================================== -->
+<script>
+;(function() {
+const P = window.P, S = window.S, C = window.C, H = window.H, UI = window.UI;
+if(!P || !S || !C || !H || !UI) return;
+
+// 独立于“登录管理”：这里管理的是内容发布用的手机号和平台小号，不是后台登录账号。
+// 归入“数据与用户”，内容运营页面仅负责选择和使用这些账号。
+const accountNavGroup = C.NAV_GROUPS.find(g => g.label === '数据与用户');
+if(accountNavGroup && !accountNavGroup.items.some(i => i.route === 'accountRegistry')) {
+  accountNavGroup.items.push(
+    { id:'accountRegistry', icon:'📱', label:'账号管理', route:'accountRegistry' }
+  );
+}
+
+S.socialAccounts = {
+  KEY:'socialAccountRegistry',
+  _normalize: (item={}) => ({
+    id: String(item.id || H.uid('sa_')),
+    phoneNumber: String(item.phoneNumber || '').trim(),
+    carrier: String(item.carrier || '').trim(),
+    platform: String(item.platform || '').trim(),
+    accountName: String(item.accountName || '').trim(),
+    accountId: String(item.accountId || '').trim(),
+    accountType: String(item.accountType || '矩阵小号').trim(),
+    owner: String(item.owner || '').trim(),
+    status: ['active','paused','disabled'].includes(item.status) ? item.status : 'active',
+    remark: String(item.remark || '').trim(),
+    createdAt: item.createdAt || H.nowISO(),
+    updatedAt: item.updatedAt || H.nowISO()
+  }),
+  all: () => {
+    const raw = S.db?.config?.socialAccountRegistry;
+    return (Array.isArray(raw) ? raw : []).map(S.socialAccounts._normalize);
+  },
+  get: (id) => S.socialAccounts.all().find(item => item.id === id) || null,
+  forPlatform: (platform='', options={}) => {
+    const p = String(platform || '').trim();
+    return S.socialAccounts.all()
+      .filter(item => options.includeInactive || item.status === 'active')
+      .filter(item => !p || item.platform === p)
+      .sort((a,b) => (a.platform + a.accountName).localeCompare(b.platform + b.accountName, 'zh-CN'));
+  },
+  _save: async (items) => {
+    const safeItems = (Array.isArray(items) ? items : []).map(S.socialAccounts._normalize);
+    const { error } = await SUPABASE.from('config').upsert({key:S.socialAccounts.KEY, value:safeItems}, {onConflict:'key'});
+    if(error) throw new Error('账号数据保存失败：' + error.message);
+    S.db.config[S.socialAccounts.KEY] = safeItems;
+    try { await S._writeModuleCache('config', S.db.config); } catch(_) {}
+    return safeItems;
+  },
+  add: async (data) => {
+    const item = S.socialAccounts._normalize({...data, id:H.uid('sa_'), createdAt:H.nowISO(), updatedAt:H.nowISO()});
+    const duplicate = S.socialAccounts.all().find(row =>
+      row.platform === item.platform && (
+        (item.accountId && row.accountId && row.accountId === item.accountId) ||
+        (row.accountName === item.accountName && row.phoneNumber === item.phoneNumber)
+      )
+    );
+    if(duplicate) throw new Error('该平台账号已存在，请直接编辑原记录');
+    await S.socialAccounts._save([...S.socialAccounts.all(), item]);
+    try { Auth.log('账号管理','新增',item.accountName,`${item.platform} · ${item.phoneNumber || '-'}`); } catch(_) {}
+    return item;
+  },
+  update: async (id, data) => {
+    const current = S.socialAccounts.get(id);
+    if(!current) throw new Error('未找到需要编辑的账号');
+    const next = S.socialAccounts._normalize({...current, ...data, id, createdAt:current.createdAt, updatedAt:H.nowISO()});
+    const duplicate = S.socialAccounts.all().find(row => row.id !== id && row.platform === next.platform && (
+      (next.accountId && row.accountId && row.accountId === next.accountId) ||
+      (row.accountName === next.accountName && row.phoneNumber === next.phoneNumber)
+    ));
+    if(duplicate) throw new Error('该平台账号已存在，请检查账号名称或平台账号 ID');
+    await S.socialAccounts._save(S.socialAccounts.all().map(row => row.id === id ? next : row));
+    try { Auth.log('账号管理','编辑',next.accountName,`${next.platform} · ${next.phoneNumber || '-'}`); } catch(_) {}
+    return next;
+  },
+  remove: async (id) => {
+    const current = S.socialAccounts.get(id);
+    if(!current) return false;
+    await S.socialAccounts._save(S.socialAccounts.all().filter(row => row.id !== id));
+    try { Auth.log('账号管理','删除',current.accountName,`${current.platform} · ${current.phoneNumber || '-'}`); } catch(_) {}
+    return true;
+  }
+};
+
+P._socialAccountStatusLabel = {active:'使用中', paused:'暂停使用', disabled:'已停用'};
+P._socialAccountStatusClass = {
+  active:'bg-green-50 text-green-700 border-green-200',
+  paused:'bg-amber-50 text-amber-700 border-amber-200',
+  disabled:'bg-gray-100 text-gray-500 border-gray-200'
+};
+P._accountRegistrySearch = P._accountRegistrySearch || '';
+P._accountRegistryPlatform = P._accountRegistryPlatform || '';
+P._accountRegistryStatus = P._accountRegistryStatus || '';
+
+P._maskPhone = (phone='') => {
+  const value = String(phone || '').trim();
+  if(value.length < 7) return value || '-';
+  return value.slice(0,3) + ' ' + value.slice(3,-4).replace(/./g,'•') + ' ' + value.slice(-4);
+};
+
+P._socialAccountOptionLabel = (item) => {
+  const card = P._maskPhone(item.phoneNumber);
+  return [item.accountName, item.accountId ? `ID:${item.accountId}` : '', card].filter(Boolean).join(' · ');
+};
+
+P._renderSocialAccountPicker = (platform='', selectedId='', currentName='') => {
+  let resolvedId = String(selectedId || '');
+  let rows = S.socialAccounts.forPlatform(platform);
+  const current = resolvedId ? S.socialAccounts.get(resolvedId) : null;
+  if(current && current.platform === String(platform || '').trim() && !rows.some(row => row.id === current.id)) rows = [current, ...rows];
+  if(!resolvedId && currentName) {
+    const matched = rows.find(row => row.accountName === String(currentName).trim());
+    if(matched) resolvedId = matched.id;
+  }
+  const selectedAccount = resolvedId ? S.socialAccounts.get(resolvedId) : null;
+  const emptyText = rows.length ? '请选择发布账号' : '当前平台暂无可用账号';
+  return `<div>
+    <label class="cos-label">发布账号 *</label>
+    <select class="cos-select" name="socialAccountId" data-social-account-select data-selected-id="${H.esc(resolvedId)}">
+      <option value="">${H.esc(emptyText)}</option>
+      ${rows.map(row=>`<option value="${H.esc(row.id)}" ${row.id===resolvedId?'selected':''}>${H.esc(P._socialAccountOptionLabel(row))}${row.status!=='active'?'（'+H.esc(P._socialAccountStatusLabel[row.status]||'不可用')+'）':''}</option>`).join('')}
+    </select>
+    <input type="hidden" name="publishAccount" value="${H.esc(selectedAccount?.accountName || '')}">
+  </div>`;
+};
+
+P._bindSocialAccountPicker = (form) => {
+  if(!form) return;
+  const platformEl = form.querySelector('[name="platform"]');
+  const accountEl = form.querySelector('[data-social-account-select]');
+  const nameEl = form.querySelector('[name="publishAccount"]');
+  const typeEl = form.querySelector('[name="accountType"]');
+  if(!accountEl || !nameEl) return;
+
+  const rebuild = () => {
+    const oldId = accountEl.value || accountEl.dataset.selectedId || '';
+    const platform = platformEl?.value || '';
+    let rows = S.socialAccounts.forPlatform(platform);
+    const old = oldId ? S.socialAccounts.get(oldId) : null;
+    if(old && old.platform === platform && !rows.some(row => row.id === old.id)) rows = [old, ...rows];
+    accountEl.innerHTML = `<option value="">${rows.length ? '请选择发布账号' : '当前平台暂无可用账号'}</option>` + rows.map(row =>
+      `<option value="${H.esc(row.id)}">${H.esc(P._socialAccountOptionLabel(row))}${row.status!=='active'?'（'+H.esc(P._socialAccountStatusLabel[row.status]||'不可用')+'）':''}</option>`
+    ).join('');
+    const canKeep = oldId && rows.some(row => row.id === oldId);
+    accountEl.value = canKeep ? oldId : '';
+    accountEl.dataset.selectedId = '';
+    if(!canKeep) nameEl.value = '';
+  };
+
+  const applySelected = () => {
+    const item = S.socialAccounts.get(accountEl.value);
+    nameEl.value = item?.accountName || '';
+    if(!item) return;
+    if(typeEl && item.accountType) typeEl.value = item.accountType;
+    if(platformEl && !platformEl.value && item.platform) {
+      platformEl.value = item.platform;
+      rebuild();
+      accountEl.value = item.id;
+      nameEl.value = item.accountName;
+    }
+  };
+
+  rebuild();
+  if(accountEl.value) applySelected();
+  accountEl.addEventListener('change', applySelected);
+  platformEl?.addEventListener('change', rebuild);
+};
+
+P._openSocialAccountModal = async (id='') => {
+  const current = id ? S.socialAccounts.get(id) : null;
+  const platforms = [...new Set([...(S.config.getPlatforms?.() || []), '小红书','抖音','视频号','B站','其他'])];
+  const carriers = ['中国移动','中国联通','中国电信','中国广电','其他'];
+  const accountTypes = [...new Set([...(P._accountTypes || []), '矩阵小号'])];
+  const html = `<div class="p-6">
+    <h2 class="text-base font-semibold text-gray-900 mb-1">${current?'编辑账号':'新增账号'}</h2>
+    <p class="text-xs text-gray-400 mb-5">同一个手机号绑定多个平台账号时，分别新增多条记录即可。</p>
+    <form id="social-account-form" class="space-y-4">
+      <div class="grid grid-cols-2 gap-4">
+        <div>${UI.renderField('手机号 *','phoneNumber','text',current?.phoneNumber||'',null,'填写绑定该小号的手机号')}</div>
+        <div>${UI.renderField('运营商','carrier','select',current?.carrier||'',carriers,'选择运营商')}</div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>${UI.renderField('平台 *','platform','select',current?.platform||'',platforms,'选择平台')}</div>
+        <div>${UI.renderField('小号名称 *','accountName','text',current?.accountName||'',null,'发布时显示和选择的名称')}</div>
+      </div>
+      <div>${UI.renderField('平台账号 ID','accountId','text',current?.accountId||'',null,'小红书号 / 抖音号 / UID')}</div>
+      <div class="grid grid-cols-3 gap-4">
+        <div>${UI.renderField('账号类型','accountType','select',current?.accountType||'矩阵小号',accountTypes,'选择账号类型')}</div>
+        <div>${UI.renderField('归属人','owner','text',current?.owner||'',null,'负责人或使用人')}</div>
+        <div>${UI.renderField('状态','status','select',current?.status||'active',['active','paused','disabled'],'选择状态')}</div>
+      </div>
+      <div>${UI.renderField('备注','remark','textarea',current?.remark||'',null,'记录养号情况、设备、异常状态等；不要填写密码或验证码')}</div>
+      <div class="rounded-xl bg-amber-50 border border-amber-100 px-3 py-2 text-xs text-amber-700">安全提示：这里只登记账号识别信息，不保存登录密码、短信验证码或支付信息。</div>
+      <div class="flex justify-end gap-3 pt-2">
+        <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+        <button type="button" class="cos-btn cos-btn-primary" id="social-account-save">保存</button>
+      </div>
+    </form>
+  </div>`;
+  const promise = UI.openModal(html);
+  setTimeout(()=>{
+    const statusEl = document.querySelector('#social-account-form [name="status"]');
+    if(statusEl) {
+      [...statusEl.options].forEach(opt => {
+        opt.textContent = P._socialAccountStatusLabel[opt.value] || opt.textContent;
+      });
+    }
+    document.getElementById('social-account-save')?.addEventListener('click', ()=>{
+      const form = document.getElementById('social-account-form');
+      const data = UI.readForm(form);
+      if(!String(data.platform||'').trim()) { UI.toast('请选择平台','error'); return; }
+      if(!String(data.accountName||'').trim()) { UI.toast('请填写小号名称','error'); return; }
+      if(!String(data.phoneNumber||'').trim()) { UI.toast('请填写手机号','error'); return; }
+      UI.closeModal(data);
+    });
+  },40);
+  const data = await promise;
+  if(!data || data === 'cancel') return;
+  try {
+    if(current) await S.socialAccounts.update(current.id, data);
+    else await S.socialAccounts.add(data);
+    UI.toast(current ? '账号已更新' : '账号已新增');
+    P.renderAccountRegistry();
+  } catch(e) {
+    UI.toast(e?.message || '账号保存失败', 'error');
+  }
+};
+
+P.renderAccountRegistry = () => {
+  P._setHeader('账号管理', '管理手机号绑定的小红书、抖音及其他发布小号');
+  document.getElementById('page-actions').innerHTML = `<button class="cos-btn cos-btn-primary" id="social-account-add">＋ 新增账号</button>`;
+
+  const all = S.socialAccounts.all();
+  const search = String(P._accountRegistrySearch || '').trim().toLowerCase();
+  const platform = P._accountRegistryPlatform || '';
+  const status = P._accountRegistryStatus || '';
+  const filtered = all.filter(item => {
+    const haystack = [item.phoneNumber,item.carrier,item.platform,item.accountName,item.accountId,item.accountType,item.owner,item.remark].join(' ').toLowerCase();
+    return (!search || haystack.includes(search)) && (!platform || item.platform===platform) && (!status || item.status===status);
+  });
+  const platforms = [...new Set(all.map(item=>item.platform).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'zh-CN'));
+  const active = all.filter(item=>item.status==='active').length;
+  const cards = new Set(all.map(item=>item.phoneNumber).filter(Boolean)).size;
+  const xhs = all.filter(item=>item.platform==='小红书').length;
+  const dy = all.filter(item=>item.platform==='抖音').length;
+
+  let html = `<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+    <div class="cos-card p-4"><div class="text-xs text-gray-400">手机号数量</div><div class="text-2xl font-bold text-gray-900 mt-1">${cards}</div></div>
+    <div class="cos-card p-4"><div class="text-xs text-gray-400">使用中账号</div><div class="text-2xl font-bold text-green-600 mt-1">${active}</div></div>
+    <div class="cos-card p-4"><div class="text-xs text-gray-400">小红书小号</div><div class="text-2xl font-bold text-red-500 mt-1">${xhs}</div></div>
+    <div class="cos-card p-4"><div class="text-xs text-gray-400">抖音小号</div><div class="text-2xl font-bold text-blue-600 mt-1">${dy}</div></div>
+  </div>
+  <div class="cos-card p-4 mb-4">
+    <div class="flex flex-wrap items-center gap-3">
+      <div class="relative flex-1 min-w-[240px] max-w-[380px]"><input class="cos-input pl-8" id="social-account-search" value="${H.esc(P._accountRegistrySearch||'')}" placeholder="搜索手机号、小号名称或账号 ID"><span class="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400">🔍</span></div>
+      <select class="cos-select !w-auto min-w-[130px] !pr-10" id="social-account-platform"><option value="">全部平台</option>${platforms.map(p=>`<option value="${H.esc(p)}" ${platform===p?'selected':''}>${H.esc(p)}</option>`).join('')}</select>
+      <select class="cos-select !w-auto min-w-[130px] !pr-10" id="social-account-status"><option value="">全部状态</option>${Object.entries(P._socialAccountStatusLabel).map(([value,label])=>`<option value="${value}" ${status===value?'selected':''}>${label}</option>`).join('')}</select>
+    </div>
+  </div>
+  <div class="rounded-xl bg-blue-50 border border-blue-100 px-4 py-3 text-xs text-blue-700 mb-4">一个手机号可以对应多条账号记录。发布内容时，先选择平台，系统只展示该平台“使用中”的登记账号。</div>
+  <div class="cos-card overflow-hidden"><div class="overflow-x-auto"><table class="cos-table min-w-max"><thead><tr>
+    <th style="width:60px">序号</th><th>手机号</th><th>平台</th><th>小号名称</th><th>平台账号 ID</th><th>账号类型</th><th>归属人</th><th>状态</th><th>备注</th><th>操作</th>
+  </tr></thead><tbody>`;
+  if(!filtered.length) {
+    html += `<tr><td colspan="10" class="py-14 text-center text-sm text-gray-400">${all.length?'没有符合筛选条件的账号':'暂无账号，点击右上角“新增账号”开始录入'}</td></tr>`;
+  } else {
+    filtered.forEach((item,index)=>{
+      html += `<tr>
+        <td class="text-xs text-gray-400">${index+1}</td>
+        <td><div class="whitespace-nowrap font-mono text-xs text-gray-800">${H.esc(item.phoneNumber||'-')}</div></td>
+        <td><span class="cos-tag">${H.esc(item.platform||'-')}</span></td>
+        <td><div class="font-medium text-gray-900">${H.esc(item.accountName||'-')}</div></td>
+        <td class="text-xs text-gray-500">${H.esc(item.accountId||'-')}</td>
+        <td class="text-xs text-gray-600">${H.esc(item.accountType||'-')}</td>
+        <td class="text-xs text-gray-600">${H.esc(item.owner||'-')}</td>
+        <td><span class="inline-flex items-center px-2 py-1 rounded-full border text-xs ${P._socialAccountStatusClass[item.status]||P._socialAccountStatusClass.disabled}">${H.esc(P._socialAccountStatusLabel[item.status]||'未知')}</span></td>
+        <td class="max-w-[220px]"><div class="truncate text-xs text-gray-500" title="${H.esc(item.remark||'')}">${H.esc(item.remark||'-')}</div></td>
+        <td class="whitespace-nowrap"><button class="cos-btn cos-btn-ghost cos-btn-sm" data-social-account-edit="${H.esc(item.id)}">编辑</button><button class="cos-btn cos-btn-ghost cos-btn-sm text-red-500" data-social-account-delete="${H.esc(item.id)}">删除</button></td>
+      </tr>`;
+    });
+  }
+  html += '</tbody></table></div></div>';
+  document.getElementById('page-body').innerHTML = html;
+
+  document.getElementById('social-account-add')?.addEventListener('click', ()=>P._openSocialAccountModal());
+  const searchEl = document.getElementById('social-account-search');
+  if(searchEl) {
+    let timer;
+    searchEl.addEventListener('input',()=>{ clearTimeout(timer); timer=setTimeout(()=>{P._accountRegistrySearch=searchEl.value;P.renderAccountRegistry();},180); });
+  }
+  document.getElementById('social-account-platform')?.addEventListener('change',e=>{P._accountRegistryPlatform=e.target.value;P.renderAccountRegistry();});
+  document.getElementById('social-account-status')?.addEventListener('change',e=>{P._accountRegistryStatus=e.target.value;P.renderAccountRegistry();});
+  document.querySelectorAll('[data-social-account-edit]').forEach(btn=>btn.addEventListener('click',()=>P._openSocialAccountModal(btn.dataset.socialAccountEdit)));
+  document.querySelectorAll('[data-social-account-delete]').forEach(btn=>btn.addEventListener('click',async()=>{
+    const item = S.socialAccounts.get(btn.dataset.socialAccountDelete);
+    if(!item) return;
+    const ok = await UI.confirm('删除账号',`确定删除“${item.accountName}”吗？历史内容中已经保存的账号名称不会被删除。`,{danger:true,confirmText:'删除'});
+    if(!ok) return;
+    try { await S.socialAccounts.remove(item.id); UI.toast('账号已删除'); P.renderAccountRegistry(); }
+    catch(e) { UI.toast(e?.message || '删除失败','error'); }
+  }));
+};
+
+P.routes.accountRegistry = () => P.renderAccountRegistry();
+
+})();
+</script>
+
 <!-- ======================================================================
      Script 5.2: operation-ledgers.js — 三类运营台账统一录入与管理
      ====================================================================== -->
@@ -15038,7 +15612,35 @@ R.syncActiveNav = (route) => {
   if(active) active.classList.add('active');
 };
 
-R.navigate = (route, options={}) => {
+R._navigateToken = 0;
+R._routeLabel = (route) => {
+  for(const group of (C.NAV_GROUPS || [])) {
+    const item = (group.items || []).find(x => x.route === route);
+    if(item) return item.label;
+  }
+  return ({workbench:'工作台', settings:'系统设置', data:'系统设置', backups:'系统设置'})[route] || '当前栏目';
+};
+
+R._renderRouteLoading = (route, state={}) => {
+  const titleEl = document.getElementById('page-title');
+  const subEl = document.getElementById('page-subtitle');
+  const bodyEl = document.getElementById('page-body');
+  const label = R._routeLabel(route);
+  if(titleEl) titleEl.textContent = label;
+  if(subEl) subEl.textContent = '正在按需加载当前栏目数据';
+  if(bodyEl) bodyEl.innerHTML = `<div class="cos-card p-8">
+    <div class="flex items-center gap-3">
+      <div class="w-5 h-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin"></div>
+      <div>
+        <div class="text-sm font-semibold text-gray-800">${H.esc(state.message || `正在加载${label}...`)}</div>
+        <div class="text-xs text-gray-400 mt-1" id="route-loading-detail">${H.esc(state.detail || '只加载当前侧边栏栏目所需信息')}</div>
+      </div>
+    </div>
+    <div class="h-1.5 rounded-full bg-gray-100 overflow-hidden mt-5"><div id="route-loading-progress" class="h-full bg-blue-500 transition-all" style="width:${Math.max(6, Number(state.progress)||6)}%"></div></div>
+  </div>`;
+};
+
+R.navigate = async (route, options={}) => {
   const P = window.P;
 
   if(!P || !P.routes) {
@@ -15052,7 +15654,10 @@ R.navigate = (route, options={}) => {
   route = String(route || '').replace(/^#/, '');
   if(!P.routes[route]) route = 'workbench';
   if(route === 'loginManage' && !(window.Auth && Auth.isAdmin && Auth.isAdmin())) route = 'settings';
+  if(route === 'backups') P._settingsTab = 'backups';
+  if(route === 'data') P._settingsTab = 'data';
 
+  const token = ++R._navigateToken;
   R.currentRoute = route;
   const targetHash = '#' + route;
   if(window.location.hash !== targetHash) {
@@ -15061,20 +15666,36 @@ R.navigate = (route, options={}) => {
   }
 
   R.syncActiveNav(route);
+  R._renderRouteLoading(route);
 
-  // 渲染页面。使用 History API，避免相邻菜单快速切换时旧 hashchange 把“系统设置”误切回“登录管理”。
-  if(P.routes[route]) {
-    try {
-      P.routes[route]();
-    } catch(err) {
-      console.error('页面渲染失败：', route, err);
-      const titleEl = document.getElementById('page-title');
-      const subEl = document.getElementById('page-subtitle');
-      const bodyEl = document.getElementById('page-body');
-      if(titleEl) titleEl.textContent = '页面加载失败';
-      if(subEl) subEl.textContent = '请把 Console 报错截图发给开发排查';
-      if(bodyEl) bodyEl.innerHTML = '<div class="cos-card p-6 text-sm text-red-600">页面渲染失败：' + H.esc(err && err.message ? err.message : String(err)) + '</div>';
-    }
+  try {
+    await S.ensureRouteData(route, state => {
+      if(token !== R._navigateToken) return;
+      const detail = document.getElementById('route-loading-detail');
+      const progress = document.getElementById('route-loading-progress');
+      if(detail) detail.textContent = state.detail || state.message || '正在加载当前栏目数据';
+      if(progress) progress.style.width = Math.max(6, Number(state.progress)||6) + '%';
+    }, {force:!!options.force});
+
+    if(token !== R._navigateToken || route !== R.currentRoute) return;
+    Auth.updateIndicator?.();
+
+    // 数据准备完成后再渲染当前栏目；已加载模块再次进入时会直接渲染，不重复请求。
+    P.routes[route]();
+  } catch(err) {
+    if(token !== R._navigateToken) return;
+    console.error('页面数据加载失败：', route, err);
+    const titleEl = document.getElementById('page-title');
+    const subEl = document.getElementById('page-subtitle');
+    const bodyEl = document.getElementById('page-body');
+    if(titleEl) titleEl.textContent = R._routeLabel(route) + '加载失败';
+    if(subEl) subEl.textContent = '其他侧边栏栏目仍可继续使用';
+    if(bodyEl) bodyEl.innerHTML = `<div class="cos-card p-6">
+      <div class="text-sm font-semibold text-red-600">当前栏目数据加载失败</div>
+      <div class="text-xs text-gray-500 mt-2 break-all">${H.esc(err?.message || String(err))}</div>
+      <button class="cos-btn cos-btn-primary mt-4" id="route-load-retry">重新加载当前栏目</button>
+    </div>`;
+    document.getElementById('route-load-retry')?.addEventListener('click', () => R.navigate(route, {replace:true, force:true}));
   }
 };
 
@@ -15109,6 +15730,9 @@ async function init() {
   UI.dataLoading.setCheck('page', 'success', '已加载');
   UI.dataLoading.setCheck('auth', 'loading', '正在连接');
 
+  // 先建立空数据仓库，不请求全部业务表。
+  await S.initLazy();
+
   try {
     await Auth.init();
     UI.dataLoading.setCheck('auth', 'success', '连接正常');
@@ -15122,43 +15746,9 @@ async function init() {
   const loggedIn = await Auth.requireLogin();
   if(!loggedIn) { UI.dataLoading.hide(); return; }
 
-  // 2. 加载数据：显示明确状态，并行请求各数据表
-  UI.dataLoading.update({
-    title:'正在加载运营数据',
-    progress:10,
-    message:'正在连接 Supabase，请稍候...',
-    detail:'准备同步内容、选题、灵感和用户数据'
-  });
-  UI.dataLoading.setCheck('data', 'loading', '正在连接');
-
-  let loadResult = null;
-  try {
-    loadResult = await S.load((state) => UI.dataLoading.update(state));
-    Auth.updateIndicator();
-    const coreFailures = (loadResult?.errors || []).filter(x => ['topics','contents','inspirations','users'].includes(x.table));
-    if(coreFailures.length === 4) {
-      const err = new Error('所有业务数据模块均连接失败');
-      err.code = 'NETWORK_ALL_DATA_FAILED';
-      err.failedModules = coreFailures;
-      throw err;
-    }
-    if(loadResult?.errors?.length) {
-      const failedNames = loadResult.errors.map(x => x.usedCache ? `${x.label || x.table}（已显示缓存）` : (x.label || x.table)).join('、');
-      UI.dataLoading.setCheck('data', 'warning', `${loadResult.errors.length} 项异常`);
-      UI.dataLoading.finish('数据已加载，部分模块暂时不可用', `未加载：${failedNames}`);
-      setTimeout(() => UI.toast(`以下模块加载失败：${failedNames}。可关闭 VPN 后刷新重试`, 'warn'), 800);
-    } else {
-      UI.dataLoading.setCheck('data', 'success', '连接正常');
-      UI.dataLoading.finish('运营数据加载完成');
-    }
-  } catch(loadError) {
-    console.error('❌ [LOAD] 首次数据加载失败：', loadError);
-    UI.dataLoading.setCheck('data', 'error', '连接失败');
-    const failedNames = Array.isArray(loadError?.failedModules) ? loadError.failedModules.map(x => x.label || x.table).join('、') : '';
-    if(failedNames) loadError.message = `无法加载：${failedNames}`;
-    UI.dataLoading.fail(loadError, () => location.reload(), 'Supabase 数据服务');
-    return;
-  }
+  // 2. 不再启动时加载全部业务数据；页面先打开，当前栏目在页面内按需加载。
+  UI.dataLoading.setCheck('data', 'success', '按需加载');
+  UI.dataLoading.finish('运营后台已打开', '切换侧边栏时再加载对应栏目，已加载栏目会自动缓存');
 
   // 2.5 每日备份提醒
   S.checkDailyReminder();
@@ -15185,17 +15775,13 @@ async function init() {
     if(gotoInsp) {
       const inspId = gotoInsp.dataset.gotoInsp;
       UI.closeDrawer();
-      setTimeout(()=>{ R.navigate('inspirations'); P.renderInspirations(); setTimeout(()=>P._openInspDrawer(inspId), 100); }, 150);
+      setTimeout(async()=>{ await R.navigate('inspirations'); setTimeout(()=>P._openInspDrawer(inspId), 100); }, 150);
       return;
     }
   });
 
   // 6. 显示初始 Toast
-  if(loadResult?.errors?.length) {
-    UI.toast('后台已打开，但有 '+loadResult.errors.length+' 项数据暂未加载', 'warn');
-  } else {
-    UI.toast('漫游心迹运营后台已就绪', 'info');
-  }
+  UI.toast('后台已就绪，数据将按侧边栏栏目加载', 'info');
 }
 
 window.addEventListener('offline', () => {
