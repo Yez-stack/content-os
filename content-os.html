@@ -8,6 +8,7 @@
 <!-- 2026-08-04: 新增账号管理；管理手机卡与小红书/抖音小号，发布内容时按平台选择对应账号 -->
 <!-- 2026-07-28: 图片大图预览改为适配屏幕可视区域；保留完整比例显示 -->
 <!-- 2026-08-04: 发布账号改为纯下拉选择，移除手动输入，并要求从账号管理中选择已登记账号 -->
+<!-- 2026-08-04: 内容库改为数据库分页按需加载；内容日历按周/月/年范围加载，“全部”按批次加载 -->
 <!-- 2026-07-30: 新增内容审核流程；审核通过后才进入内容日历和内容库；支持配置审核权限与填写驳回原因 -->
 <!-- 2026-07-30: 选题库仅展示待做/待审核/审核驳回；废弃内容从看板、列表和日历隐藏 -->
 <!-- 2026-07-30: 删除图片/视频/整条内容时同步清理 images 存储桶；待审核内容支持提交人撤销并重新编辑 -->
@@ -2002,6 +2003,153 @@ S._fetchContentsPaged = async (onProgress) => {
   return rows;
 };
 
+
+// ============ 内容库 / 内容日历渐进式加载 ============
+// 内容库首次只请求当前页；日历只请求当前周、月或年份。
+// 切换页码或日期范围时再请求对应数据，并在内存中缓存已加载页/范围。
+S._contentPager = {
+  pageSize:20,
+  total:0,
+  pages:{},
+  loadingPage:0,
+  error:'',
+  lastLoadedAt:''
+};
+S._calendarRangeCache = {};
+S._calendarAllPager = {pageSize:50, total:0, pages:{}, loadingPage:0, error:''};
+
+S._mergeContentRows = (rawRows=[], alreadyCamel=false) => {
+  const mapped = S._normalizeContentRows((Array.isArray(rawRows)?rawRows:[]).map(row => alreadyCamel ? row : _toCamel2(row)));
+  const list = Array.isArray(S.db?.contents) ? S.db.contents : (S.db.contents=[]);
+  const index = new Map(list.map((row,i)=>[String(row.id),i]));
+  mapped.forEach(row => {
+    const key = String(row.id || '');
+    if(!key) return;
+    if(index.has(key)) Object.assign(list[index.get(key)], row);
+    else { index.set(key, list.length); list.push(row); }
+  });
+  S._migrate();
+  return mapped;
+};
+
+S.resetContentPagination = () => {
+  S._contentPager = {pageSize:20,total:0,pages:{},loadingPage:0,error:'',lastLoadedAt:''};
+};
+S.invalidateCalendarCache = () => {
+  S._calendarRangeCache = {};
+  S._calendarAllPager = {pageSize:50,total:0,pages:{},loadingPage:0,error:''};
+};
+
+S.loadContentPage = async (page=1, options={}) => {
+  page = Math.max(1, parseInt(page,10)||1);
+  const force = !!options.force;
+  const pager = S._contentPager;
+  if(!force && Array.isArray(pager.pages[page])) {
+    return {rows:S.getContentPageRows(page), total:pager.total, page, cached:true};
+  }
+  if(pager.loadingPage === page && pager.promise) return pager.promise;
+  const size = pager.pageSize || 20;
+  const from = (page-1)*size;
+  const to = from+size-1;
+  pager.loadingPage = page;
+  pager.error = '';
+  S._loadStatus.contents = {status:'loading',fromCache:false,error:'',count:pager.total||0,lastLoadedAt:pager.lastLoadedAt||'',partial:true,detail:`正在加载内容库第 ${page} 页`};
+  const task = (async()=>{
+    try {
+      const response = await window.CONTENT_OS_NETWORK.withRetry(
+        () => SUPABASE.from('contents')
+          .select('*', {count:'exact'})
+          .order('publish_date', {ascending:false, nullsFirst:false})
+          .order('publish_time', {ascending:false, nullsFirst:false})
+          .order('created_at', {ascending:false})
+          .range(from,to),
+        {label:`内容库第 ${page} 页`,timeoutMs:15000,attempts:2}
+      );
+      if(response?.error) throw response.error;
+      const rows = S._mergeContentRows(response?.data || [], false);
+      pager.pages[page] = rows.map(row=>String(row.id));
+      pager.total = Number.isFinite(Number(response?.count)) ? Number(response.count) : Math.max(pager.total||0, from+rows.length);
+      pager.lastLoadedAt = H.nowISO();
+      S._loadStatus.contents = {status:'success',fromCache:false,error:'',count:pager.total,lastLoadedAt:pager.lastLoadedAt,partial:true,detail:`第 ${page} 页已加载`};
+      return {rows,total:pager.total,page,cached:false};
+    } catch(e) {
+      pager.error = e?.message || String(e);
+      S._loadStatus.contents = {status:'error',fromCache:false,error:pager.error,count:pager.total||0,lastLoadedAt:pager.lastLoadedAt||'',partial:true};
+      throw e;
+    } finally {
+      pager.loadingPage = 0;
+      delete pager.promise;
+    }
+  })();
+  pager.promise = task;
+  return task;
+};
+
+S.getContentPageRows = (page=1) => {
+  const ids = S._contentPager?.pages?.[Math.max(1,parseInt(page,10)||1)] || [];
+  const map = new Map((S.db?.contents||[]).map(row=>[String(row.id),row]));
+  return ids.map(id=>map.get(String(id))).filter(Boolean);
+};
+
+S._calendarRangeKey = (start,end) => `${start || ''}|${end || ''}`;
+S.loadCalendarRange = async (start,end,options={}) => {
+  const key = S._calendarRangeKey(start,end);
+  if(!options.force && S._calendarRangeCache[key]) return S.getCalendarRangeRows(start,end);
+  const response = await window.CONTENT_OS_NETWORK.withRetry(
+    () => SUPABASE.from('contents')
+      .select('*')
+      .gte('publish_date',start)
+      .lte('publish_date',end)
+      .order('publish_date',{ascending:true})
+      .order('publish_time',{ascending:true,nullsFirst:false}),
+    {label:`内容日历 ${start} 至 ${end}`,timeoutMs:15000,attempts:2}
+  );
+  if(response?.error) throw response.error;
+  const rows = S._mergeContentRows(response?.data || [], false);
+  S._calendarRangeCache[key] = {ids:rows.map(row=>String(row.id)),loadedAt:H.nowISO()};
+  return rows;
+};
+S.getCalendarRangeRows = (start,end) => {
+  const ids = S._calendarRangeCache[S._calendarRangeKey(start,end)]?.ids || [];
+  const map = new Map((S.db?.contents||[]).map(row=>[String(row.id),row]));
+  return ids.map(id=>map.get(String(id))).filter(Boolean);
+};
+
+S.loadCalendarAllPage = async (page=1,options={}) => {
+  page=Math.max(1,parseInt(page,10)||1);
+  const pager=S._calendarAllPager;
+  if(!options.force && Array.isArray(pager.pages[page])) return {rows:S.getCalendarAllPageRows(page),total:pager.total,page,cached:true};
+  if(pager.loadingPage===page && pager.promise) return pager.promise;
+  const size=pager.pageSize||50, from=(page-1)*size, to=from+size-1;
+  pager.loadingPage=page;
+  const task=(async()=>{
+    try{
+      const response=await window.CONTENT_OS_NETWORK.withRetry(
+        ()=>SUPABASE.from('contents').select('*',{count:'exact'})
+          .order('publish_date',{ascending:false,nullsFirst:false})
+          .order('publish_time',{ascending:false,nullsFirst:false})
+          .order('created_at',{ascending:false})
+          .range(from,to),
+        {label:`内容日历全部第 ${page} 批`,timeoutMs:15000,attempts:2}
+      );
+      if(response?.error) throw response.error;
+      const rows=S._mergeContentRows(response?.data||[],false);
+      pager.pages[page]=rows.map(row=>String(row.id));
+      pager.total=Number.isFinite(Number(response?.count))?Number(response.count):Math.max(pager.total||0,from+rows.length);
+      pager.error='';
+      return {rows,total:pager.total,page,cached:false};
+    }catch(e){pager.error=e?.message||String(e);throw e;}
+    finally{pager.loadingPage=0;delete pager.promise;}
+  })();
+  pager.promise=task;
+  return task;
+};
+S.getCalendarAllPageRows = (page=1) => {
+  const ids=S._calendarAllPager?.pages?.[Math.max(1,parseInt(page,10)||1)]||[];
+  const map=new Map((S.db?.contents||[]).map(row=>[String(row.id),row]));
+  return ids.map(id=>map.get(String(id))).filter(Boolean);
+};
+
 S._refreshContentViews = () => {
   const route = window.R?.currentRoute || window.location.hash.replace('#','') || '';
   if(route === 'calendar' && window.P?.renderCalendarPage) P.renderCalendarPage();
@@ -2269,6 +2417,10 @@ S._assignLoadedModule = (name, raw, alreadyCamel=false) => {
   if(!alreadyCamel) rows = rows.map(_toCamel2);
   if(name === 'contents') rows = S._normalizeContentRows(rows);
   S.db[name] = rows;
+  if(name === 'contents') {
+    S.resetContentPagination?.();
+    S.invalidateCalendarCache?.();
+  }
   S._migrate();
   return rows.length;
 };
@@ -2374,8 +2526,8 @@ S.modulesForRoute = (route) => {
     hotspots:['config'],
     topics:['config','topics','inspirations'],
     'content-center':['config','topics','inspirations'],
-    contents:['config','contents','topics'],
-    calendar:['config','contents','topics'],
+    contents:['config','topics'],
+    calendar:['config','topics'],
     channels:['config','contents','topics'],
     analytics:['config','contents'],
     users:['config','users'],
@@ -2777,6 +2929,7 @@ S._crud = (collection) => {
         const final = _toCamel2(returned[0]);
         try { localStorage.setItem('content_os_last_cloud_write', H.nowISO()); localStorage.setItem('content_os_last_cloud_write_status', 'ok'); } catch(_) {}
         S.db[collection].push(final);
+        if(collection === 'contents') { S.resetContentPagination?.(); S.invalidateCalendarCache?.(); }
         window.CONTENT_OS_DEBUG && console.log('✅ [CRUD] '+collection+'.add("'+(item.title||item.content||item.id)+'"): '+before+'→'+S.db[collection].length);
         S._logOperation(collection, '新增', final, '新增了「' + S._operationTargetText(final) + '」');
         return final;
@@ -2823,6 +2976,7 @@ S._crud = (collection) => {
         }
       }
 
+      if(collection === 'contents') { S.resetContentPagination?.(); S.invalidateCalendarCache?.(); }
       S._logOperation(collection, '编辑', S.db[collection][idx], '编辑了「' + S._operationTargetText(S.db[collection][idx]) + '」');
       return S.db[collection][idx];
     },
@@ -2845,6 +2999,7 @@ S._crud = (collection) => {
       // 只有 Supabase 删除成功后才更新本地内存
       try { localStorage.setItem('content_os_last_cloud_write', H.nowISO()); localStorage.setItem('content_os_last_cloud_write_status', 'ok'); } catch(_) {}
       S.db[collection] = S.db[collection].filter(x => x.id !== id);
+      if(collection === 'contents') { S.resetContentPagination?.(); S.invalidateCalendarCache?.(); }
       window.CONTENT_OS_DEBUG && console.log('✅ [CRUD] '+collection+'.remove('+id+'): '+before+'→'+S.db[collection].length);
       S._logOperation(collection, '删除', removedItem, '删除了「' + S._operationTargetText(removedItem) + '」');
       S._lastMediaCleanup = null;
@@ -7144,6 +7299,31 @@ P._saveFilters = () => {
 
 P._resetPage = () => { P._contentPage = 1; P._contentTableSort = { key: null, dir: 'none' }; };
 
+P._contentNeedsFullDataset = (F=P._contentFilters||P._defaultFilters()) => {
+  const listKeys=['platform','account','publisher','accountType','theme','format','hook','goal','rating'];
+  if(listKeys.some(key=>Array.isArray(F[key])&&F[key].length)) return true;
+  if(String(F.search||'').trim()) return true;
+  if(F.hasAd && F.hasAd!=='all') return true;
+  if(F.timeRange && F.timeRange!=='all') return true;
+  if(F.burst) return true;
+  if((F.sortBy||'publishDate')!=='publishDate') return true;
+  if(P._contentTableSort?.key && P._contentTableSort?.dir!=='none') return true;
+  return false;
+};
+P._contentPagedMode = () => !S.isModuleLoaded('contents') && !P._contentNeedsFullDataset(P._contentFilters||P._defaultFilters());
+P._ensureContentPageData = async () => {
+  if(!P._contentFilters) P._loadFilters();
+  if(P._contentNeedsFullDataset(P._contentFilters)) {
+    if(!S.isModuleLoaded('contents')) {
+      S._loadStatus.contents={status:'loading',fromCache:false,error:'',count:S._contentPager?.total||0,lastLoadedAt:'',detail:'高级筛选需要完整数据，正在按批加载'};
+      await S.loadModule('contents');
+    }
+    return;
+  }
+  if(!S.isModuleLoaded('contents')) await S.loadContentPage(P._contentPage);
+};
+
+
 // --- 表格列排序状态: { key: 'views'|'exposure'|..., dir: 'none'|'desc'|'asc' } ---
 P._contentTableSort = { key: null, dir: 'none' };
 
@@ -7661,7 +7841,7 @@ P._clearFilters = () => {
   P._contentFilters = P._defaultFilters();
   P._saveFilters();
   P._resetPage();
-  P.renderContents();
+  P.renderContentsPage();
 };
 
 P._activeFilterTags = (F) => {
@@ -7703,14 +7883,15 @@ P._removeFilterTag = (tag) => {
   }
   P._resetPage();
   P._saveFilters();
-  P.renderContents();
+  P.renderContentsPage();
 };
 
 P.renderContents = (containerId) => {
   const target = containerId||'page-body';
   if(!P._contentFilters) P._loadFilters();
   const F = P._contentFilters;
-  const contents = S.contents.all();
+  const pagedMode = P._contentPagedMode();
+  const contents = pagedMode ? S.getContentPageRows(P._contentPage) : S.contents.all();
   const platforms = S.config.getPlatforms();
   const themes = S.config.getThemes();
   const formats = S.config.getFormats();
@@ -7812,7 +7993,7 @@ P.renderContents = (containerId) => {
 
   // ====== 统计（全量，不受分页影响） ======
   const s_ = (key) => filtered.reduce((s,c)=>s+(c.metrics?.[key]||0),0);
-  const totalCount = filtered.length;
+  const totalCount = pagedMode ? Number(S._contentPager?.total || filtered.length) : filtered.length;
   const stats = { count:totalCount, exposure:s_('exposure'), likes:s_('likes'), comments:s_('comments'), adCost:s_('adCost') };
 
   // ====== 分页 ======
@@ -7822,8 +8003,8 @@ P.renderContents = (containerId) => {
   if(P._contentPage > totalPages) P._contentPage = totalPages;
   const page = P._contentPage;
   const startIdx = (page - 1) * pageSize;
-  const pageItems = filtered.slice(startIdx, startIdx + pageSize);
-  const endIdx = Math.min(startIdx + pageSize, totalCount);
+  const pageItems = pagedMode ? filtered : filtered.slice(startIdx, startIdx + pageSize);
+  const endIdx = Math.min(startIdx + pageItems.length, totalCount);
 
   // ====== 活跃标签 ======
   const activeTags = P._activeFilterTags(F);
@@ -7835,10 +8016,10 @@ P.renderContents = (containerId) => {
   html += `<div class="grid grid-cols-5 gap-3">`;
   const cards = [
     {label:'内容数',value:totalCount,color:'text-gray-900'},
-    {label:'曝光',value:H.fmtNum(stats.exposure),color:'text-brand-600'},
-    {label:'点赞',value:H.fmtNum(stats.likes),color:'text-rose-600'},
-    {label:'评论',value:H.fmtNum(stats.comments),color:'text-amber-600'},
-    {label:'投流金额',value:'¥'+stats.adCost,color:'text-emerald-600'},
+    {label:pagedMode?'本页曝光':'曝光',value:H.fmtNum(stats.exposure),color:'text-brand-600'},
+    {label:pagedMode?'本页点赞':'点赞',value:H.fmtNum(stats.likes),color:'text-rose-600'},
+    {label:pagedMode?'本页评论':'评论',value:H.fmtNum(stats.comments),color:'text-amber-600'},
+    {label:pagedMode?'本页投流金额':'投流金额',value:'¥'+stats.adCost,color:'text-emerald-600'},
   ];
   cards.forEach(c=>html+=`<div class="cos-card p-3.5 flex flex-col"><span class="text-xs text-gray-500">${c.label}</span><span class="text-lg font-semibold ${c.color} mt-0.5 tabular-nums">${c.value}</span></div>`);
   html += `</div>`;
@@ -7982,7 +8163,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
       await S.contents.update(cid, { metrics: newMetrics });
       el.textContent = val;
       UI.toast((metricLabels[field]||field)+'已更新');
-      P.renderContents();
+      P.renderContentsPage();
     });
     el.addEventListener('keydown', (e) => {
       if(e.key==='Enter'){ e.preventDefault(); el.blur(); }
@@ -8002,7 +8183,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
         F.search = value.trim();
         P._resetPage();
         P._saveFilters();
-        P.renderContents();
+        P.renderContentsPage();
         setTimeout(() => {
           const next = document.getElementById('content-search');
           if(next){
@@ -8021,29 +8202,29 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
 
   // 平台下拉
   const ps=document.getElementById('content-filter-platform');
-  if(ps) ps.onchange=()=>{const v=ps.value;F.platform=v?[v]:[];P._resetPage();P._saveFilters();P.renderContents();};
+  if(ps) ps.onchange=()=>{const v=ps.value;F.platform=v?[v]:[];P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 发布账号下拉
   const acc=document.getElementById('content-filter-account');
-  if(acc) acc.onchange=()=>{const v=acc.value;F.account=v?[v]:[];P._resetPage();P._saveFilters();P.renderContents();};
+  if(acc) acc.onchange=()=>{const v=acc.value;F.account=v?[v]:[];P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 发布人/分发人下拉
   const pub=document.getElementById('content-filter-publisher');
-  if(pub) pub.onchange=()=>{const v=pub.value;F.publisher=v?[v]:[];P._resetPage();P._saveFilters();P.renderContents();};
+  if(pub) pub.onchange=()=>{const v=pub.value;F.publisher=v?[v]:[];P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 时间下拉
   const tr=document.getElementById('content-filter-timeRange');
-  if(tr) tr.onchange=()=>{F.timeRange=tr.value;if(F.timeRange==='custom'){F.advancedOpen=true;}P._resetPage();P._saveFilters();P.renderContents();};
+  if(tr) tr.onchange=()=>{F.timeRange=tr.value;if(F.timeRange==='custom'){F.advancedOpen=true;}P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 高级筛选 toggle
   const at=document.getElementById('content-advanced-toggle');
-  if(at) at.onclick=()=>{F.advancedOpen=!F.advancedOpen;P._saveFilters();P.renderContents();};
+  if(at) at.onclick=()=>{F.advancedOpen=!F.advancedOpen;P._saveFilters();P.renderContentsPage();};
 
   // 自定义日期
   const df=document.getElementById('filter-date-from');
   const dt=document.getElementById('filter-date-to');
-  if(df) df.onchange=()=>{F.dateFrom=df.value;P._resetPage();P._saveFilters();P.renderContents();};
-  if(dt) dt.onchange=()=>{F.dateTo=dt.value;P._resetPage();P._saveFilters();P.renderContents();};
+  if(df) df.onchange=()=>{F.dateFrom=df.value;P._resetPage();P._saveFilters();P.renderContentsPage();};
+  if(dt) dt.onchange=()=>{F.dateTo=dt.value;P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 多选 filter chips
   document.querySelectorAll('[data-multi-filter]').forEach(b=>{
@@ -8051,7 +8232,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
       const k=b.dataset.multiFilter, v=b.dataset.value;
       if(k==='hasAd'){F.hasAd=v||'all';}
       else{if(!v){F[k]=[];}else{if(!Array.isArray(F[k]))F[k]=[];const i=F[k].indexOf(v);if(i>=0)F[k].splice(i,1);else F[k].push(v);}}
-      P._resetPage();P._saveFilters();P.renderContents();
+      P._resetPage();P._saveFilters();P.renderContentsPage();
     };
   });
 
@@ -8067,17 +8248,17 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
       if(v==='prev') P._contentPage = Math.max(1, P._contentPage - 1);
       else if(v==='next') P._contentPage = Math.min(P._totalPages||1, P._contentPage + 1);
       else P._contentPage = parseInt(v) || 1;
-      P.renderContents();
+      P.renderContentsPage();
     };
   });
 
   // 排序字段 + 方向
   const sb=document.getElementById('content-sort-by');
-  if(sb) sb.onchange=()=>{F.sortBy=sb.value;P._resetPage();P._saveFilters();P.renderContents();};
+  if(sb) sb.onchange=()=>{F.sortBy=sb.value;P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 爆款
   const bb=document.getElementById('content-filter-burst');
-  if(bb) bb.onclick=()=>{F.burst=!F.burst;P._resetPage();P._saveFilters();P.renderContents();};
+  if(bb) bb.onclick=()=>{F.burst=!F.burst;P._resetPage();P._saveFilters();P.renderContentsPage();};
 
   // 重置
   const cb=document.getElementById('content-filter-clear');
@@ -8085,7 +8266,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
 
   // 快捷排序
   document.querySelectorAll('[data-quick-sort]').forEach(b=>{
-    b.onclick=()=>{F.sortBy=b.dataset.quickSort;F.sortDesc=b.dataset.desc==='true';F.burst=false;P._resetPage();P._saveFilters();P.renderContents();};
+    b.onclick=()=>{F.sortBy=b.dataset.quickSort;F.sortDesc=b.dataset.desc==='true';F.burst=false;P._resetPage();P._saveFilters();P.renderContentsPage();};
   });
 
   // 表格列排序
@@ -8103,7 +8284,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
         st.dir = 'desc';
       }
       P._contentPage = 1;
-      P.renderContents();
+      P.renderContentsPage();
     };
   });
 
@@ -8112,7 +8293,7 @@ P._bindContentEvents = (platforms,themes,formats,hooks,goals) => {
   document.querySelectorAll('[data-content-trend]').forEach(b=>{b.onclick=(e)=>{e.stopPropagation(); P._openContentTrendModal(b.dataset.contentTrend);};});
   document.querySelectorAll('[data-edit-content]').forEach(b=>{b.onclick=()=>P._openContentEditModal(b.dataset.editContent);});
   document.querySelectorAll('[data-delete-content]').forEach(b=>{
-    b.onclick=async()=>{const c=await UI.confirm('删除内容','确定删除这条内容？对应的封面、截图和视频也会从 Supabase Storage 永久删除，选题不会被删除。',{danger:true,confirmText:'删除'});if(c){const removed=await S.contents.remove(b.dataset.deleteContent);if(removed){const cleanup=S._lastMediaCleanup;if(cleanup?.failed?.length)UI.toast(`内容已删除，但有 ${cleanup.failed.length} 个云端文件清理失败，请检查 Storage DELETE 权限`,'warn');else UI.toast(cleanup?.deleted>0?'内容及云端媒体已删除':'内容已删除');P._resetPage();P.renderContents();}}};
+    b.onclick=async()=>{const c=await UI.confirm('删除内容','确定删除这条内容？对应的封面、截图和视频也会从 Supabase Storage 永久删除，选题不会被删除。',{danger:true,confirmText:'删除'});if(c){const removed=await S.contents.remove(b.dataset.deleteContent);if(removed){const cleanup=S._lastMediaCleanup;if(cleanup?.failed?.length)UI.toast(`内容已删除，但有 ${cleanup.failed.length} 个云端文件清理失败，请检查 Storage DELETE 权限`,'warn');else UI.toast(cleanup?.deleted>0?'内容及云端媒体已删除':'内容已删除');P._resetPage();P.renderContentsPage();}}};
   });
 };
 
@@ -8439,6 +8620,7 @@ P._openContentEditModal = async (contentId) => {
 
 P._calView = P._calView || 'week'; // all | week | month | year
 P._calCurrentDate = P._calCurrentDate || H.today();
+P._calAllPage = P._calAllPage || 1;
 
 P._normalizePublishDate = (v, fallback='') => {
   return H.parseDate(v) || H.parseDate(fallback) || String(v || fallback || '').slice(0,10);
@@ -8606,7 +8788,9 @@ P._openCalendarPublishModal = async (date, target) => {
     const published = await S.publishTopic(tid,result);
     if(!published) { UI.toast('发布失败，图片、视频和内容未保存，请重试', 'error'); return; }
     UI.toast('发布成功！');
-    P.renderCalendar(target);
+    S.invalidateCalendarCache?.();
+    S.resetContentPagination?.();
+    P.renderCalendarPage();
   });
 };
 
@@ -8727,14 +8911,17 @@ P._renderCalendarAll = (all, byDate, target) => {
 
 P.renderCalendar = (containerId) => {
   const target = containerId||'page-body';
-  const all = S.contents.all().map(c=>({
+  const range = P._calRange();
+  const sourceRows = P._calView==='all'
+    ? S.getCalendarAllPageRows(P._calAllPage)
+    : S.getCalendarRangeRows(range.start, range.end);
+  const all = sourceRows.map(c=>({
     ...c,
     publishDate: P._normalizePublishDate(c.publishDate),
     publishTime: P._normalizePublishTime(c.publishTime)
   }));
   const today = H.today();
   const byDate = P._calGroupByDate(all);
-  const range = P._calRange();
 
   let scoped = all;
   if(P._calView !== 'all') scoped = all.filter(c=>c.publishDate>=range.start && c.publishDate<=range.end);
@@ -8764,7 +8951,7 @@ P.renderCalendar = (containerId) => {
     </div>
 
     <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
-      <div class="cos-card p-3"><div class="text-xs text-gray-500">${P._calView==='all'?'全部范围':range.label}</div><div class="text-lg font-semibold text-gray-900">${scoped.length} 篇</div></div>
+      <div class="cos-card p-3"><div class="text-xs text-gray-500">${P._calView==='all'?'全部内容':range.label}</div><div class="text-lg font-semibold text-gray-900">${P._calView==='all'?(S._calendarAllPager.total||scoped.length):scoped.length} 篇</div></div>
       <div class="cos-card p-3"><div class="text-xs text-gray-500">小红书</div><div class="text-lg font-semibold text-red-500">${platformCount['小红书']||0}</div></div>
       <div class="cos-card p-3"><div class="text-xs text-gray-500">抖音</div><div class="text-lg font-semibold text-gray-900">${platformCount['抖音']||0}</div></div>
       <div class="cos-card p-3"><div class="text-xs text-gray-500">今日内容</div><div class="text-lg font-semibold text-brand-600">${all.filter(c=>c.publishDate===today).length}</div></div>
@@ -8773,7 +8960,11 @@ P.renderCalendar = (containerId) => {
   if(P._calView === 'week') html += P._renderCalendarWeek(all, byDate, target);
   else if(P._calView === 'month') html += P._renderCalendarMonth(all, byDate, target);
   else if(P._calView === 'year') html += P._renderCalendarYear(all, byDate, target);
-  else html += P._renderCalendarAll(all, byDate, target);
+  else {
+    html += P._renderCalendarAll(all, byDate, target);
+    const allTotalPages=Math.max(1,Math.ceil((S._calendarAllPager.total||all.length)/(S._calendarAllPager.pageSize||50)));
+    if(allTotalPages>1) html += `<div class="flex items-center justify-between mt-4"><span class="text-xs text-gray-400">第 ${P._calAllPage} / ${allTotalPages} 批，每批 ${S._calendarAllPager.pageSize||50} 条</span><div class="flex gap-2"><button class="cos-btn cos-btn-secondary cos-btn-xs" data-cal-all-page="prev" ${P._calAllPage<=1?'disabled':''}>上一批</button><button class="cos-btn cos-btn-secondary cos-btn-xs" data-cal-all-page="next" ${P._calAllPage>=allTotalPages?'disabled':''}>下一批</button></div></div>`;
+  }
 
   html += `</div>`;
 
@@ -8783,15 +8974,16 @@ P.renderCalendar = (containerId) => {
     btn.onclick = () => {
       P._calView = btn.dataset.calView;
       if(P._calView === 'week') P._calCurrentDate = H.today();
-      P.renderCalendar(target);
+      if(P._calView==='all') P._calAllPage=1;
+      P.renderCalendarPage();
     };
   });
   const prev = document.getElementById('cal-prev');
-  if(prev) prev.onclick = () => { P._calCurrentDate = P._calAdd(P._calCurrentDate, P._calView, -1); P.renderCalendar(target); };
+  if(prev) prev.onclick = () => { P._calCurrentDate = P._calAdd(P._calCurrentDate, P._calView, -1); P.renderCalendarPage(); };
   const next = document.getElementById('cal-next');
-  if(next) next.onclick = () => { P._calCurrentDate = P._calAdd(P._calCurrentDate, P._calView, 1); P.renderCalendar(target); };
+  if(next) next.onclick = () => { P._calCurrentDate = P._calAdd(P._calCurrentDate, P._calView, 1); P.renderCalendarPage(); };
   const todayBtn = document.getElementById('cal-today');
-  if(todayBtn) todayBtn.onclick = () => { P._calCurrentDate = H.today(); if(P._calView==='all') P._calView='week'; P.renderCalendar(target); };
+  if(todayBtn) todayBtn.onclick = () => { P._calCurrentDate = H.today(); if(P._calView==='all') P._calView='week'; P.renderCalendarPage(); };
 
   document.querySelectorAll('[data-cal-content]').forEach(b=>{
     b.onclick = (e)=>{ e.stopPropagation(); P._openContentDrawer(b.dataset.calContent); };
@@ -8807,7 +8999,14 @@ P.renderCalendar = (containerId) => {
       if(e.target.closest('[data-cal-content]')) return;
       P._calView = 'month';
       P._calCurrentDate = b.dataset.calJumpMonth;
-      P.renderCalendar(target);
+      P.renderCalendarPage();
+    };
+  });
+  document.querySelectorAll('[data-cal-all-page]').forEach(btn=>{
+    btn.onclick=()=>{
+      if(btn.dataset.calAllPage==='prev') P._calAllPage=Math.max(1,P._calAllPage-1);
+      else P._calAllPage+=1;
+      P.renderCalendarPage();
     };
   });
 };
@@ -8849,31 +9048,65 @@ P._bindContentReloadButton = () => {
     btn.onclick = async () => {
       btn.disabled = true;
       btn.textContent = '正在加载...';
-      try { await S.reloadContents(); }
+      try {
+        const route=window.R?.currentRoute||'';
+        if(route==='contents') { S.resetContentPagination(); await P.renderContentsPage(); }
+        else if(route==='calendar') { S.invalidateCalendarCache(); await P.renderCalendarPage(); }
+        else await S.reloadContents();
+      }
       catch(_) { btn.disabled = false; btn.textContent = '重新加载内容'; }
     };
   });
 };
 
-P.renderContentsPage = () => {
-  document.getElementById('page-body').innerHTML = `<div id="content-load-status">${P._contentLoadStatusHtml()}</div><div id="page-body-inner"></div>`;
-  P.renderContents('page-body-inner');
-  // 内容库顶部操作按钮
+P._contentRenderToken = 0;
+P.renderContentsPage = async () => {
+  const token=++P._contentRenderToken;
+  const body=document.getElementById('page-body');
+  if(!body) return;
+  body.innerHTML = `<div class="cos-card p-5 flex items-center gap-3"><span class="cos-spinner"></span><div><div class="text-sm font-medium text-gray-800">正在加载内容库</div><div class="text-xs text-gray-400 mt-1">首次只加载当前页，切换页码时再加载下一批</div></div></div>`;
+  try{
+    await P._ensureContentPageData();
+    if(token!==P._contentRenderToken || window.R?.currentRoute!=='contents') return;
+    body.innerHTML = `<div id="content-load-status">${P._contentLoadStatusHtml()}</div><div id="page-body-inner"></div>`;
+    P.renderContents('page-body-inner');
+  }catch(e){
+    if(token!==P._contentRenderToken) return;
+    body.innerHTML=`<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-4"><div class="text-sm font-medium text-red-700">内容库加载失败</div><div class="text-xs text-red-600 mt-1">${H.esc(e?.message||String(e))}</div><button class="cos-btn cos-btn-secondary cos-btn-sm mt-3" id="content-page-retry">重新加载当前页</button></div>`;
+    document.getElementById('content-page-retry')?.addEventListener('click',()=>{S._contentPager.pages[P._contentPage]=null;P.renderContentsPage();});
+  }
   const actionsEl = document.getElementById('page-actions');
   if(actionsEl) actionsEl.innerHTML = '<button class="cos-btn cos-btn-secondary" id="btn-export-content-data">📤 导出</button><button class="cos-btn cos-btn-primary" id="btn-import-content-data">📥 导入</button>';
   setTimeout(() => {
     const exportBtn = document.getElementById('btn-export-content-data');
     const importBtn = document.getElementById('btn-import-content-data');
-    if(exportBtn) exportBtn.onclick = async () => { await S.exportContentData(); };
+    if(exportBtn) exportBtn.onclick = async () => {
+      if(!S.isModuleLoaded('contents')) await S.loadModule('contents');
+      await S.exportContentData();
+    };
     if(importBtn) importBtn.onclick = () => P._importContentData(importBtn);
     P._bindContentReloadButton();
-  }, 50);
+  }, 30);
 };
 
-P.renderCalendarPage = () => {
-  document.getElementById('page-body').innerHTML = `<div id="content-load-status">${P._contentLoadStatusHtml()}</div><div id="page-body-inner"></div>`;
-  P.renderCalendar('page-body-inner');
-  setTimeout(() => P._bindContentReloadButton(), 30);
+P._calendarRenderToken=0;
+P.renderCalendarPage = async () => {
+  const token=++P._calendarRenderToken;
+  const body=document.getElementById('page-body');
+  if(!body) return;
+  const range=P._calRange();
+  body.innerHTML=`<div class="cos-card p-5 flex items-center gap-3"><span class="cos-spinner"></span><div><div class="text-sm font-medium text-gray-800">正在加载内容日历</div><div class="text-xs text-gray-400 mt-1">${P._calView==='all'?`正在加载第 ${P._calAllPage} 批内容`:`只加载 ${range.label} 的内容`}</div></div></div>`;
+  try{
+    if(P._calView==='all') await S.loadCalendarAllPage(P._calAllPage);
+    else await S.loadCalendarRange(range.start,range.end);
+    if(token!==P._calendarRenderToken || window.R?.currentRoute!=='calendar') return;
+    body.innerHTML=`<div id="content-load-status"></div><div id="page-body-inner"></div>`;
+    P.renderCalendar('page-body-inner');
+  }catch(e){
+    if(token!==P._calendarRenderToken) return;
+    body.innerHTML=`<div class="rounded-xl border border-red-200 bg-red-50 px-4 py-4"><div class="text-sm font-medium text-red-700">内容日历加载失败</div><div class="text-xs text-red-600 mt-1">${H.esc(e?.message||String(e))}</div><button class="cos-btn cos-btn-secondary cos-btn-sm mt-3" id="calendar-page-retry">重新加载当前范围</button></div>`;
+    document.getElementById('calendar-page-retry')?.addEventListener('click',()=>{if(P._calView==='all') delete S._calendarAllPager.pages[P._calAllPage]; else delete S._calendarRangeCache[S._calendarRangeKey(range.start,range.end)];P.renderCalendarPage();});
+  }
 };
 
 // ==================== 内容库 → 渠道分发：批量同步 ====================
@@ -11043,7 +11276,7 @@ P._importXiaohongshuData = (triggerBtn) => {
     P._setXhsImportButtonLoading(false);
 
     UI.toast(`导入完成：共读取 ${rowTotal} 条，成功更新 ${updated} 条${failed>0?'，失败 '+failed+' 条':''}，未匹配 ${unmatched.length} 条。`);
-    P.renderContents();
+    P.renderContentsPage();
     P._openXhsImportResult(log);
   };
   input.click();
