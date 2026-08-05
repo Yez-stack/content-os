@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>漫游心迹运营后台</title>
+<!-- 2026-08-05: 修复审核通过无响应：不再审核时全量加载内容库，改为按 topic_id 轻量查重并立即写入内容库/内容日历 -->
 <!-- 2026-08-05: 内容库顶部统计改为总内容数、总曝光、总点赞、总评论、总投流金额；分页时并行读取轻量 metrics 汇总 -->
 <!-- 2026-08-04: 启动改为侧边栏按需懒加载；首次只加载当前栏目，切换栏目再加载对应数据并复用缓存 -->
 <!-- 2026-08-04: 新增账号管理；管理手机卡与小红书/抖音小号，发布内容时按平台选择对应账号 -->
@@ -3389,15 +3390,36 @@ S.reviewQueue = {
 
 // --- 审核通过：选题 → 内容库与内容日历 ---
 S.publishTopic = async (topicId, publishData, auditMeta={}) => {
-  // 内容库不再随选题库一起加载；真正发布时再补加载，避免重复内容并保证写入后的本地列表完整。
-  if(!S.isModuleLoaded('contents')) await S.loadModule('contents');
   const topic = S.topics.get(topicId);
   if(!topic) { console.warn(`🔍 [DIAG] publishTopic 未找到 topic=${topicId}`); return null; }
-  const existingContent = S.contents.all().find(c => c.topicId === topicId);
+
+  // 审核页通常只加载了选题模块。旧逻辑会在这里先全量加载内容库，
+  // 数据量较大时用户点击“审核通过”后会长时间没有反馈，甚至因某一批请求失败而无法写入。
+  // 现在只按 topic_id 做一次轻量查重；无需加载整个内容库即可立即完成审核同步。
+  let existingContent = S.contents.all().find(c => String(c.topicId || '') === String(topicId));
+  if(!existingContent) {
+    try {
+      const response = await window.CONTENT_OS_NETWORK.withRetry(
+        () => SUPABASE.from('contents').select('*').eq('topic_id', topicId).limit(1),
+        {label:'检查审核内容是否已同步', timeoutMs:12000, attempts:2}
+      );
+      if(response?.error) throw response.error;
+      const matched = S._mergeContentRows(response?.data || [], false);
+      existingContent = matched[0] || null;
+    } catch(e) {
+      console.error('❌ [REVIEW APPROVE] 内容查重失败：', e?.message || e);
+      throw new Error('审核同步前检查失败：' + (e?.message || '网络异常'));
+    }
+  }
+
   if(existingContent) {
-    await S.topics.update(topicId, {status:'published'});
+    const updatedTopic = await S.topics.update(topicId, {status:'published'});
+    if(!updatedTopic) throw new Error(S._lastCrudError?.message || '选题状态更新失败');
+    S.resetContentPagination?.();
+    S.invalidateCalendarCache?.();
     return existingContent;
   }
+
   window.CONTENT_OS_DEBUG && console.log(`🔍 [DIAG] publishTopic: topic="${topic.title}" → content, platform=${publishData.platform} date=${publishData.publishDate}`);
   const content = {
     id: H.uid('ct_'),
@@ -3430,8 +3452,11 @@ S.publishTopic = async (topicId, publishData, auditMeta={}) => {
     updatedAt: H.nowISO()
   };
   const insertedContent = await S.contents.add(content);
-  if(!insertedContent) return null;
-  await S.topics.update(topicId, { status:'published' });
+  if(!insertedContent) throw new Error(S._lastCrudError?.message || '内容库写入失败');
+
+  const updatedTopic = await S.topics.update(topicId, { status:'published' });
+  if(!updatedTopic) throw new Error(S._lastCrudError?.message || '内容已写入，但选题状态更新失败，请再次点击审核通过');
+
   // 如果是从灵感转来的，更新灵感状态
   const insp = S.inspirations.all().find(i=>i.convertedTopicId===topicId);
   if(insp) await S.inspirations.update(insp.id, { status:'converted' });
@@ -7343,10 +7368,14 @@ P._openReviewModal = async (topicId) => {
   const confirmed = await UI.confirm('审核通过','通过后将自动进入内容日历和内容库，是否确认？',{confirmText:'确认通过'});
   if(!confirmed) return;
   try {
+    UI.toast('正在审核并同步到内容库和内容日历…','info');
     await S.reviewQueue.approve(topicId);
     UI.toast('审核通过，内容已同步到内容日历和内容库');
     P.renderTopics();
-  } catch(e) { UI.toast(e?.message || '审核通过失败','error'); }
+  } catch(e) {
+    console.error('❌ [REVIEW APPROVE] 审核通过失败：', e);
+    UI.toast(e?.message || '审核通过失败','error');
+  }
 };
 
 // ==================== 灵感 Modal ====================
