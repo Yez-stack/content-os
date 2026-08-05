@@ -4,11 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>漫游心迹运营后台</title>
+<!-- 2026-08-05: 内容库顶部统计改为总内容数、总曝光、总点赞、总评论、总投流金额；分页时并行读取轻量 metrics 汇总 -->
 <!-- 2026-08-04: 启动改为侧边栏按需懒加载；首次只加载当前栏目，切换栏目再加载对应数据并复用缓存 -->
 <!-- 2026-08-04: 新增账号管理；管理手机卡与小红书/抖音小号，发布内容时按平台选择对应账号 -->
 <!-- 2026-07-28: 图片大图预览改为适配屏幕可视区域；保留完整比例显示 -->
-<!-- 2026-08-04: 发布账号改为纯下拉选择，移除手动输入，并要求从账号管理中选择已登记账号 -->
-<!-- 2026-08-04: 内容库改为数据库分页按需加载；内容日历按周/月/年范围加载，“全部”按批次加载 -->
+<!-- 2026-08-05: 发布账号改为可选；可从账号管理选择，也可留空保存 -->
+<!-- 2026-08-05: 内容库继续按页加载；导入时单独读取全库轻量索引，小红书未匹配数据只跳过不新增 -->
+<!-- 2026-08-05: 小红书导入改为每批 8 条并发更新，并取消每条更新返回完整记录，减少等待时间 -->
 <!-- 2026-07-30: 新增内容审核流程；审核通过后才进入内容日历和内容库；支持配置审核权限与填写驳回原因 -->
 <!-- 2026-07-30: 选题库仅展示待做/待审核/审核驳回；废弃内容从看板、列表和日历隐藏 -->
 <!-- 2026-07-30: 删除图片/视频/整条内容时同步清理 images 存储桶；待审核内容支持提交人撤销并重新编辑 -->
@@ -2015,6 +2017,18 @@ S._contentPager = {
   error:'',
   lastLoadedAt:''
 };
+// 内容库顶部总览：仅拉取 metrics 轻量字段，避免为了统计总曝光等数据加载全部内容正文和媒体。
+S._contentTotals = {
+  status:'idle',
+  count:0,
+  exposure:0,
+  likes:0,
+  comments:0,
+  adCost:0,
+  error:'',
+  lastLoadedAt:'',
+  promise:null
+};
 S._calendarRangeCache = {};
 S._calendarAllPager = {pageSize:50, total:0, pages:{}, loadingPage:0, error:''};
 
@@ -2032,8 +2046,12 @@ S._mergeContentRows = (rawRows=[], alreadyCamel=false) => {
   return mapped;
 };
 
+S.invalidateContentTotals = () => {
+  S._contentTotals = {status:'idle',count:0,exposure:0,likes:0,comments:0,adCost:0,error:'',lastLoadedAt:'',promise:null};
+};
 S.resetContentPagination = () => {
   S._contentPager = {pageSize:20,total:0,pages:{},loadingPage:0,error:'',lastLoadedAt:''};
+  S.invalidateContentTotals();
 };
 S.invalidateCalendarCache = () => {
   S._calendarRangeCache = {};
@@ -2089,6 +2107,63 @@ S.getContentPageRows = (page=1) => {
   const ids = S._contentPager?.pages?.[Math.max(1,parseInt(page,10)||1)] || [];
   const map = new Map((S.db?.contents||[]).map(row=>[String(row.id),row]));
   return ids.map(id=>map.get(String(id))).filter(Boolean);
+};
+
+S.loadContentTotals = async (options={}) => {
+  const force = !!options.force;
+  const cached = S._contentTotals || {};
+  if(!force && cached.status === 'success') return cached;
+  if(!force && cached.status === 'loading' && cached.promise) return cached.promise;
+
+  const state = S._contentTotals = {
+    status:'loading', count:0, exposure:0, likes:0, comments:0, adCost:0,
+    error:'', lastLoadedAt:cached.lastLoadedAt || '', promise:null
+  };
+  const task = (async()=>{
+    const PAGE_SIZE = 1000;
+    let from = 0;
+    let count = 0;
+    let exposure = 0;
+    let likes = 0;
+    let comments = 0;
+    let adCost = 0;
+    try {
+      while(true) {
+        const response = await window.CONTENT_OS_NETWORK.withRetry(
+          () => SUPABASE.from('contents')
+            .select('metrics', {count: from === 0 ? 'exact' : undefined})
+            .range(from, from + PAGE_SIZE - 1),
+          {label:'内容库总数据统计',timeoutMs:15000,attempts:2}
+        );
+        if(response?.error) throw response.error;
+        const rows = Array.isArray(response?.data) ? response.data : [];
+        rows.forEach(row => {
+          const m = (row?.metrics && typeof row.metrics === 'object') ? row.metrics : {};
+          exposure += Number(m.exposure) || 0;
+          likes += Number(m.likes) || 0;
+          comments += Number(m.comments) || 0;
+          adCost += Number(m.adCost ?? m.ad_cost) || 0;
+        });
+        count += rows.length;
+        if(rows.length < PAGE_SIZE) {
+          if(Number.isFinite(Number(response?.count))) count = Number(response.count);
+          break;
+        }
+        from += PAGE_SIZE;
+      }
+      Object.assign(state, {
+        status:'success', count, exposure, likes, comments, adCost,
+        error:'', lastLoadedAt:H.nowISO(), promise:null
+      });
+      return state;
+    } catch(e) {
+      Object.assign(state, {status:'error',error:e?.message || String(e),promise:null});
+      console.warn('⚠️ 内容库总数据统计加载失败：', state.error);
+      return state;
+    }
+  })();
+  state.promise = task;
+  return task;
 };
 
 S._calendarRangeKey = (start,end) => `${start || ''}|${end || ''}`;
@@ -3015,6 +3090,92 @@ S._crud = (collection) => {
 S.inspirations = S._crud('inspirations');
 S.topics      = S._crud('topics');
 S.contents    = S._crud('contents');
+
+// 导入匹配专用：只读取全库必要字段，避免内容库只加载当前页时把后续页误判为“新增”。
+// 该索引不会写入当前页面缓存，也不会改变内容库的按页加载逻辑。
+S.getContentImportIndex = async () => {
+  const PAGE_SIZE = 500;
+  const MAX_PAGES = 100;
+  const rows = [];
+  for(let page = 0; page < MAX_PAGES; page++) {
+    const from = page * PAGE_SIZE;
+    const to = from + PAGE_SIZE - 1;
+    const response = await window.CONTENT_OS_NETWORK.withRetry(
+      () => SUPABASE.from('contents')
+        .select('id,title,platform,publish_date,publish_time,content_link,source_url,metrics,review,theme')
+        .order('created_at', {ascending:false})
+        .range(from, to),
+      {label:`导入匹配索引第 ${page + 1} 批`, timeoutMs:15000, attempts:2}
+    );
+    if(response?.error) throw response.error;
+    const batch = S._normalizeContentRows((response?.data || []).map(_toCamel2));
+    rows.push(...batch);
+    if(batch.length < PAGE_SIZE) break;
+  }
+  return rows;
+};
+
+// 导入更新专用：允许更新尚未加载到当前页内存中的内容。
+// 不再要求 Supabase 返回完整记录，减少每条请求的响应体和解析耗时。
+S.updateContentFromImport = async (id, patch) => {
+  const clean = SANITIZE.contents({id, ...patch});
+  delete clean.id;
+
+  const requestUpdate = async (payload) => {
+    const request = () => SUPABASE.from('contents').update(payload).eq('id', id);
+    if(window.CONTENT_OS_NETWORK?.withRetry) {
+      return window.CONTENT_OS_NETWORK.withRetry(request, {
+        label:'导入更新内容', timeoutMs:15000, attempts:2
+      });
+    }
+    return request();
+  };
+
+  let res = await requestUpdate(clean);
+  if(res?.error && Object.prototype.hasOwnProperty.call(clean, 'publish_screenshot')) {
+    const fallbackClean = {...clean};
+    delete fallbackClean.publish_screenshot;
+    res = await requestUpdate(fallbackClean);
+  }
+  if(res?.error) throw res.error;
+
+  // 导入结束后会统一刷新当前页；这里只同步当前内存中已经加载的记录。
+  const idx = (S.db.contents || []).findIndex(row => String(row.id) === String(id));
+  if(idx >= 0) {
+    Object.assign(S.db.contents[idx], patch, {updatedAt:patch.updatedAt || H.nowISO()});
+    S.db.contents[idx].publishDate = H.parseDate(S.db.contents[idx].publishDate) || S.db.contents[idx].publishDate || '';
+  }
+  try {
+    localStorage.setItem('content_os_last_cloud_write', H.nowISO());
+    localStorage.setItem('content_os_last_cloud_write_status', 'ok');
+  } catch(_) {}
+  return {id, ...patch};
+};
+
+// 批量导入更新：数据库仍按记录安全更新，但每批并发执行，避免 60 多条数据逐条串行等待。
+// 默认每批 8 条，兼顾速度和 Supabase / 浏览器连接数限制。
+S.updateContentsFromImportBatch = async (updates, options={}) => {
+  const list = Array.isArray(updates) ? updates.filter(item => item && item.id && item.patch) : [];
+  const requestedSize = Number(options.batchSize || 8);
+  const batchSize = Math.max(1, Math.min(12, Number.isFinite(requestedSize) ? Math.floor(requestedSize) : 8));
+  const results = new Array(list.length);
+
+  for(let start = 0; start < list.length; start += batchSize) {
+    const chunk = list.slice(start, start + batchSize);
+    const settled = await Promise.allSettled(
+      chunk.map(item => S.updateContentFromImport(item.id, item.patch))
+    );
+    settled.forEach((result, offset) => {
+      const index = start + offset;
+      const item = list[index];
+      results[index] = result.status === 'fulfilled'
+        ? {ok:true, id:item.id, value:result.value}
+        : {ok:false, id:item.id, error:result.reason};
+    });
+    try { options.onProgress?.(Math.min(start + chunk.length, list.length), list.length); } catch(_) {}
+  }
+  return results;
+};
 
 S.users       = S._crud('users');
 S.knowledge   = S._crud('knowledge');
@@ -7045,7 +7206,6 @@ P._openPublishModal = async (topicId) => {
         if(UI.hasPendingMediaUploads(form)) { UI.toast('图片或视频仍在上传，请上传完成后再提交审核', 'warn'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         const data = UI.readForm(form);
         if(!data.platform) { UI.toast('请选择发布平台','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
-        if(!data.socialAccountId) { UI.toast('请选择发布账号','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         if(!data.theme) { UI.toast('请选择内容类型','error'); btn.disabled = false; btn.textContent = btnOrigText; btn.dataset.submitting = 'false'; return; }
         UI.closeModal(data);
       } catch(e) {
@@ -7320,7 +7480,13 @@ P._ensureContentPageData = async () => {
     }
     return;
   }
-  if(!S.isModuleLoaded('contents')) await S.loadContentPage(P._contentPage);
+  if(!S.isModuleLoaded('contents')) {
+    // 当前页与顶部总览并行加载；总览只读取 metrics，避免整库正文/图片拖慢页面。
+    await Promise.all([
+      S.loadContentPage(P._contentPage),
+      S.loadContentTotals()
+    ]);
+  }
 };
 
 
@@ -7991,10 +8157,25 @@ P.renderContents = (containerId) => {
   // ====== 缓存当前筛选结果：用于批量同步到「渠道分发」 ======
   P._contentCurrentFiltered = [...filtered];
 
-  // ====== 统计（全量，不受分页影响） ======
-  const s_ = (key) => filtered.reduce((s,c)=>s+(c.metrics?.[key]||0),0);
-  const totalCount = pagedMode ? Number(S._contentPager?.total || filtered.length) : filtered.length;
-  const stats = { count:totalCount, exposure:s_('exposure'), likes:s_('likes'), comments:s_('comments'), adCost:s_('adCost') };
+  // ====== 统计（顶部统一显示总数据，不随当前页变化） ======
+  const s_ = (key) => filtered.reduce((s,c)=>s+(Number(c.metrics?.[key])||0),0);
+  const totalsReady = !pagedMode || S._contentTotals?.status === 'success';
+  const totalCount = pagedMode
+    ? Number(S._contentTotals?.count || S._contentPager?.total || filtered.length)
+    : filtered.length;
+  const stats = pagedMode && totalsReady ? {
+    count:totalCount,
+    exposure:Number(S._contentTotals.exposure)||0,
+    likes:Number(S._contentTotals.likes)||0,
+    comments:Number(S._contentTotals.comments)||0,
+    adCost:Number(S._contentTotals.adCost)||0
+  } : {
+    count:totalCount,
+    exposure:s_('exposure'),
+    likes:s_('likes'),
+    comments:s_('comments'),
+    adCost:s_('adCost')
+  };
 
   // ====== 分页 ======
   const pageSize = P._contentPageSize;
@@ -8014,12 +8195,13 @@ P.renderContents = (containerId) => {
 
   // --- 统计卡片 ---
   html += `<div class="grid grid-cols-5 gap-3">`;
+  const totalsFallback = pagedMode && !totalsReady;
   const cards = [
     {label:'内容数',value:totalCount,color:'text-gray-900'},
-    {label:pagedMode?'本页曝光':'曝光',value:H.fmtNum(stats.exposure),color:'text-brand-600'},
-    {label:pagedMode?'本页点赞':'点赞',value:H.fmtNum(stats.likes),color:'text-rose-600'},
-    {label:pagedMode?'本页评论':'评论',value:H.fmtNum(stats.comments),color:'text-amber-600'},
-    {label:pagedMode?'本页投流金额':'投流金额',value:'¥'+stats.adCost,color:'text-emerald-600'},
+    {label:totalsFallback?'本页曝光':'总曝光',value:H.fmtNum(stats.exposure),color:'text-brand-600'},
+    {label:totalsFallback?'本页点赞':'总点赞',value:H.fmtNum(stats.likes),color:'text-rose-600'},
+    {label:totalsFallback?'本页评论':'总评论',value:H.fmtNum(stats.comments),color:'text-amber-600'},
+    {label:totalsFallback?'本页投流金额':'总投流金额',value:'¥'+H.fmtNum(stats.adCost),color:'text-emerald-600'},
   ];
   cards.forEach(c=>html+=`<div class="cos-card p-3.5 flex flex-col"><span class="text-xs text-gray-500">${c.label}</span><span class="text-lg font-semibold ${c.color} mt-0.5 tabular-nums">${c.value}</span></div>`);
   html += `</div>`;
@@ -8523,7 +8705,6 @@ P._openContentEditModal = async (contentId) => {
       if(!form) return;
       if(UI.hasPendingMediaUploads(form)) { UI.toast('图片或视频仍在上传，请上传完成后再保存', 'warn'); return; }
       const data = UI.readForm(form);
-      if(!data.socialAccountId) { UI.toast('请选择发布账号','error'); return; }
       UI.closeModal(data);
     };
   }, 50);
@@ -8774,7 +8955,6 @@ P._openCalendarPublishModal = async (date, target) => {
       if(UI.hasPendingMediaUploads(form)) { UI.toast('图片或视频仍在上传，请上传完成后再发布', 'warn'); return; }
       const data=UI.readForm(form);
       if(!data.platform){UI.toast('请选择平台','error');return;}
-      if(!data.socialAccountId){UI.toast('请选择发布账号','error');return;}
       if(!data.theme){UI.toast('请选择内容类型','error');return;}
       const selectedTopic = topics.find(item => item.id === data.topicId);
       data.theme = data.theme || selectedTopic?.theme || '';
@@ -11015,8 +11195,18 @@ P._importXiaohongshuData = (triggerBtn) => {
 
     window.CONTENT_OS_DEBUG && console.log('小红书导入解析结果预览：', imported.slice(0, 3));
 
-    // 匹配
-    const contents = S.contents.all();
+    // 匹配：读取全内容库轻量索引，而不是只读取当前已加载页。
+    let contents = [];
+    try {
+      contents = typeof S.getContentImportIndex === 'function'
+        ? await S.getContentImportIndex()
+        : S.contents.all();
+    } catch(indexError) {
+      console.error('读取内容库匹配索引失败：', indexError);
+      finishInitialLoading();
+      UI.toast('无法读取完整内容库，已停止导入，避免误匹配或误新增','error');
+      return;
+    }
     const matches = [];    // { imported, content, matchType }
     const unmatched = [];  // imported 中未匹配的
     const matchedContentIds = new Set();
@@ -11189,12 +11379,13 @@ P._importXiaohongshuData = (triggerBtn) => {
     P._setXhsImportButtonLoading(true, '正在更新...');
     P._openXhsLoadingModal('正在更新内容数据', `正在写入 ${canUpdate} 条内容数据，请稍候...`);
 
-    // 执行更新
+    // 执行更新：先生成更新计划，再按每批 8 条并发写入。
     const importTime = H.nowISO();
     let updated = 0, failed = 0;
     const updatedItems = [];
     const failedItems = [];
     const updatedFieldSet = new Set();
+    const batchEntries = [];
 
     for(const m of matches) {
       const imp = m.imported;
@@ -11223,31 +11414,62 @@ P._importXiaohongshuData = (triggerBtn) => {
         newMetrics.dataUpdatedAt = importTime;
         newMetrics.metricHistory = P._appendMetricHistory(oldMetrics, newMetrics, { source:'xhs_import', importedAt:importTime, fileName:file.name });
 
-        const res = await S.contents.update(m.content.id, {
-          ...(colContentType >= 0 ? { theme: imp.contentType || m.content.theme || '' } : {}),
-          metrics: newMetrics,
-          review: newReview,
-          updatedAt: H.nowISO()
+        batchEntries.push({
+          id:m.content.id,
+          patch:{
+            ...(colContentType >= 0 ? { theme: imp.contentType || m.content.theme || '' } : {}),
+            metrics:newMetrics,
+            review:newReview,
+            updatedAt:importTime
+          },
+          meta:{m, imp, changes}
         });
-        if(res) {
-          updated++;
-          updatedItems.push({
-            contentId: m.content.id,
-            title: m.content.title || imp.title || '',
-            importedTitle: imp.title || '',
-            matchType: m.matchType,
-            changes
-          });
-        } else {
-          failed++;
-          failedItems.push({ contentId:m.content.id, title:m.content.title || imp.title || '', reason:'Supabase 更新失败' });
-        }
       } catch(err) {
-        console.error('更新失败:', m.content.id, err);
+        console.error('生成更新数据失败:', m.content.id, err);
         failed++;
-        failedItems.push({ contentId:m.content.id, title:m.content.title || imp.title || '', reason:err?.message || '更新异常' });
+        failedItems.push({ contentId:m.content.id, title:m.content.title || imp.title || '', reason:err?.message || '生成更新数据异常' });
       }
     }
+
+    let batchResults = [];
+    if(typeof S.updateContentsFromImportBatch === 'function') {
+      batchResults = await S.updateContentsFromImportBatch(
+        batchEntries.map(entry => ({id:entry.id, patch:entry.patch})),
+        {
+          batchSize:8,
+          onProgress:(done, total) => {
+            const box = document.getElementById('modal-box');
+            const message = box?.querySelector('.text-sm.font-medium.text-gray-700');
+            if(message) message.textContent = `正在写入 ${done}/${total} 条内容数据，请稍候...`;
+          }
+        }
+      );
+    } else {
+      const settled = await Promise.allSettled(batchEntries.map(entry => S.updateContentFromImport(entry.id, entry.patch)));
+      batchResults = settled.map((result, index) => result.status === 'fulfilled'
+        ? {ok:true, id:batchEntries[index].id, value:result.value}
+        : {ok:false, id:batchEntries[index].id, error:result.reason});
+    }
+
+    batchResults.forEach((result, index) => {
+      const entry = batchEntries[index];
+      const {m, imp, changes} = entry.meta;
+      if(result?.ok) {
+        updated++;
+        updatedItems.push({
+          contentId:m.content.id,
+          title:m.content.title || imp.title || '',
+          importedTitle:imp.title || '',
+          matchType:m.matchType,
+          changes
+        });
+      } else {
+        const err = result?.error;
+        console.error('更新失败:', m.content.id, err);
+        failed++;
+        failedItems.push({ contentId:m.content.id, title:m.content.title || imp.title || '', reason:err?.message || 'Supabase 更新失败' });
+      }
+    });
 
     const log = {
       id: H.uid('xhslog_'),
@@ -11276,7 +11498,9 @@ P._importXiaohongshuData = (triggerBtn) => {
     P._setXhsImportButtonLoading(false);
 
     UI.toast(`导入完成：共读取 ${rowTotal} 条，成功更新 ${updated} 条${failed>0?'，失败 '+failed+' 条':''}，未匹配 ${unmatched.length} 条。`);
-    P.renderContentsPage();
+    S.resetContentPagination?.();
+    S.invalidateCalendarCache?.();
+    await P.renderContentsPage();
     P._openXhsImportResult(log);
   };
   input.click();
@@ -11411,7 +11635,16 @@ P._importContentData = (triggerBtn) => {
       }
       if(!imported.length) throw new Error('没有识别到有效内容数据');
 
-      const existing = S.contents.all();
+      if(triggerBtn) triggerBtn.innerHTML = '<span class="cos-spinner" style="width:14px;height:14px;border-width:2px"></span>正在匹配全库...';
+      let existing = [];
+      try {
+        existing = typeof S.getContentImportIndex === 'function'
+          ? await S.getContentImportIndex()
+          : S.contents.all();
+      } catch(indexError) {
+        console.error('读取内容库匹配索引失败：', indexError);
+        throw new Error('无法读取完整内容库，已停止导入，避免把后续页数据误判为新增');
+      }
       const usedIds = new Set();
       const plans = imported.map(item => {
         const nt = P._normalizeTitle(item.title);
@@ -11435,18 +11668,25 @@ P._importContentData = (triggerBtn) => {
       });
 
       const updateCount = plans.filter(p => p.match).length;
-      const addCount = plans.length - updateCount;
+      const unmatchedCount = plans.length - updateCount;
+      const addCount = isXhsLike ? 0 : unmatchedCount;
+      const confirmMessage = isXhsLike
+        ? `共识别 ${plans.length} 条小红书数据：匹配并更新 ${updateCount} 条，未匹配 ${unmatchedCount} 条将跳过，不会新增${skipped ? `；另跳过 ${skipped} 条空行或重复数据` : ''}。确认导入吗？`
+        : `共识别 ${plans.length} 条内容：已有数据将更新 ${updateCount} 条，未匹配数据将新增 ${addCount} 条${skipped ? `，跳过 ${skipped} 条空行或重复数据` : ''}。确认导入吗？`;
       const confirmed = await UI.confirm(
-        isXhsLike ? '导入小红书数据' : '导入内容数据',
-        `共识别 ${plans.length} 条内容：已有数据将更新 ${updateCount} 条，未匹配数据将新增 ${addCount} 条${skipped ? `，跳过 ${skipped} 条空行或重复数据` : ''}。确认导入吗？`,
-        {confirmText:'确认导入'}
+        isXhsLike ? '导入小红书数据（仅更新）' : '导入内容数据',
+        confirmMessage,
+        {confirmText:isXhsLike ? '确认更新' : '确认导入'}
       );
       if(!confirmed) return;
 
       if(triggerBtn) triggerBtn.innerHTML = '<span class="cos-spinner" style="width:14px;height:14px;border-width:2px"></span>正在导入...';
       const importTime = H.nowISO();
       let added = 0, updated = 0, failed = 0;
+      const updateEntries = [];
+      const addEntries = [];
 
+      // 先生成全部更新计划，随后统一并发写入，避免逐条等待网络往返。
       for(const plan of plans) {
         const item = plan.item;
         try {
@@ -11478,38 +11718,85 @@ P._importContentData = (triggerBtn) => {
             if(item.platform) patch.platform = item.platform;
             if(item.publishDate) patch.publishDate = item.publishDate;
             if(item.contentLink) patch.contentLink = item.contentLink;
-            const result = await S.contents.update(c.id, patch);
-            if(result) updated++; else failed++;
+            updateEntries.push({id:c.id, patch, title:item.title});
+          } else if(isXhsLike) {
+            // 小红书导入只更新已有内容；未匹配记录必须跳过，禁止自动新增。
+            continue;
           } else {
-            const metrics = {
-              exposure:item.exposure ?? 0, likes:item.likes ?? 0, comments:item.comments ?? 0,
-              favorites:item.favorites ?? 0, shares:item.shares ?? 0, views:item.views ?? 0, downloads:0,
-              followerGrowth:0, adCost:0, dataUpdatedAt:importTime, recordDays:[],
-              publishAccount:'', accountType:'', publisherId:'', publisherName:'', publisherEmail:''
-            };
-            if(typeof P._appendMetricHistory === 'function') {
-              metrics.metricHistory = P._appendMetricHistory({}, metrics, {source:importSource, importedAt:importTime, fileName:file.name});
-            }
-            const content = {
-              id:H.uid('ct_'), topicId:null, title:item.title, coverImage:null,
-              platform:item.platform || '其他', publishDate:item.publishDate || H.today(), publishTime:'',
-              contentLink:item.contentLink || null, bodyText:'', publishScreenshot:null, theme:item.contentType || '', format:'', hook:'', goal:'', tags:[],
-              productionCostMinutes:0, metrics, rating:null,
-              review:{why:'', result:'', successReasons:'', failureReasons:'', optimization:'', contentType:item.contentType || '', privateInquiries:item.privateInquiries ?? 0, groupJoins:item.groupJoins ?? 0, contentReview:item.contentReview || ''},
-              sourcePlatform:importSource, sourceUrl:item.contentLink || '', createdAt:importTime, updatedAt:importTime
-            };
-            const result = await S.contents.add(content);
-            if(result) added++; else failed++;
+            addEntries.push(item);
           }
         } catch(err) {
-          console.error('内容数据导入失败：', item.title, err);
+          console.error('生成内容导入计划失败：', item.title, err);
           failed++;
         }
       }
 
-      UI.toast(`导入完成：新增 ${added} 条，更新 ${updated} 条${failed ? `，失败 ${failed} 条` : ''}`, failed ? 'warn' : 'success');
-      P._contentPage = 1;
-      P.renderContentsPage();
+      let updateResults = [];
+      if(updateEntries.length) {
+        if(typeof S.updateContentsFromImportBatch === 'function') {
+          updateResults = await S.updateContentsFromImportBatch(
+            updateEntries.map(entry => ({id:entry.id, patch:entry.patch})),
+            {
+              batchSize:8,
+              onProgress:(done, total) => {
+                if(triggerBtn) triggerBtn.innerHTML = `<span class="cos-spinner" style="width:14px;height:14px;border-width:2px"></span>正在更新 ${done}/${total}...`;
+              }
+            }
+          );
+        } else {
+          const settled = await Promise.allSettled(updateEntries.map(entry => S.updateContentFromImport(entry.id, entry.patch)));
+          updateResults = settled.map((result, index) => result.status === 'fulfilled'
+            ? {ok:true, id:updateEntries[index].id, value:result.value}
+            : {ok:false, id:updateEntries[index].id, error:result.reason});
+        }
+
+        updateResults.forEach((result, index) => {
+          if(result?.ok) updated++;
+          else {
+            console.error('内容数据更新失败：', updateEntries[index]?.title, result?.error);
+            failed++;
+          }
+        });
+      }
+
+      // 非小红书的未匹配内容仍按原规则新增；小红书未匹配项不会进入这里。
+      for(const item of addEntries) {
+        try {
+          const metrics = {
+            exposure:item.exposure ?? 0, likes:item.likes ?? 0, comments:item.comments ?? 0,
+            favorites:item.favorites ?? 0, shares:item.shares ?? 0, views:item.views ?? 0, downloads:0,
+            followerGrowth:0, adCost:0, dataUpdatedAt:importTime, recordDays:[],
+            publishAccount:'', accountType:'', publisherId:'', publisherName:'', publisherEmail:''
+          };
+          if(typeof P._appendMetricHistory === 'function') {
+            metrics.metricHistory = P._appendMetricHistory({}, metrics, {source:importSource, importedAt:importTime, fileName:file.name});
+          }
+          const content = {
+            id:H.uid('ct_'), topicId:null, title:item.title, coverImage:null,
+            platform:item.platform || '其他', publishDate:item.publishDate || H.today(), publishTime:'',
+            contentLink:item.contentLink || null, bodyText:'', publishScreenshot:null, theme:item.contentType || '', format:'', hook:'', goal:'', tags:[],
+            productionCostMinutes:0, metrics, rating:null,
+            review:{why:'', result:'', successReasons:'', failureReasons:'', optimization:'', contentType:item.contentType || '', privateInquiries:item.privateInquiries ?? 0, groupJoins:item.groupJoins ?? 0, contentReview:item.contentReview || ''},
+            sourcePlatform:importSource, sourceUrl:item.contentLink || '', createdAt:importTime, updatedAt:importTime
+          };
+          const result = await S.contents.add(content);
+          if(result) added++; else failed++;
+        } catch(err) {
+          console.error('内容数据新增失败：', item.title, err);
+          failed++;
+        }
+      }
+
+      const currentPage = Math.max(1, parseInt(P._contentPage, 10) || 1);
+      if(isXhsLike) {
+        UI.toast(`小红书导入完成：更新 ${updated} 条，未匹配 ${unmatchedCount} 条（已跳过，不新增）${failed ? `，失败 ${failed} 条` : ''}`, failed ? 'warn' : 'success');
+      } else {
+        UI.toast(`导入完成：新增 ${added} 条，更新 ${updated} 条${failed ? `，失败 ${failed} 条` : ''}`, failed ? 'warn' : 'success');
+      }
+      S.resetContentPagination?.();
+      S.invalidateCalendarCache?.();
+      P._contentPage = currentPage;
+      await P.renderContentsPage();
     } catch(err) {
       console.error('内容库通用数据导入失败：', err);
       UI.toast('导入失败：' + (err?.message || '文件格式不正确'), 'error');
@@ -13923,9 +14210,9 @@ P._renderSocialAccountPicker = (platform='', selectedId='', currentName='') => {
     if(matched) resolvedId = matched.id;
   }
   const selectedAccount = resolvedId ? S.socialAccounts.get(resolvedId) : null;
-  const emptyText = rows.length ? '请选择发布账号' : '当前平台暂无可用账号';
+  const emptyText = rows.length ? '不选择发布账号（可选）' : '暂无可用账号（可不选）';
   return `<div>
-    <label class="cos-label">发布账号 *</label>
+    <label class="cos-label">发布账号</label>
     <select class="cos-select" name="socialAccountId" data-social-account-select data-selected-id="${H.esc(resolvedId)}">
       <option value="">${H.esc(emptyText)}</option>
       ${rows.map(row=>`<option value="${H.esc(row.id)}" ${row.id===resolvedId?'selected':''}>${H.esc(P._socialAccountOptionLabel(row))}${row.status!=='active'?'（'+H.esc(P._socialAccountStatusLabel[row.status]||'不可用')+'）':''}</option>`).join('')}
@@ -13948,7 +14235,7 @@ P._bindSocialAccountPicker = (form) => {
     let rows = S.socialAccounts.forPlatform(platform);
     const old = oldId ? S.socialAccounts.get(oldId) : null;
     if(old && old.platform === platform && !rows.some(row => row.id === old.id)) rows = [old, ...rows];
-    accountEl.innerHTML = `<option value="">${rows.length ? '请选择发布账号' : '当前平台暂无可用账号'}</option>` + rows.map(row =>
+    accountEl.innerHTML = `<option value="">${rows.length ? '不选择发布账号（可选）' : '暂无可用账号（可不选）'}</option>` + rows.map(row =>
       `<option value="${H.esc(row.id)}">${H.esc(P._socialAccountOptionLabel(row))}${row.status!=='active'?'（'+H.esc(P._socialAccountStatusLabel[row.status]||'不可用')+'）':''}</option>`
     ).join('');
     const canKeep = oldId && rows.some(row => row.id === oldId);
