@@ -170,6 +170,81 @@
     .review-modal-footer .cos-btn { flex: 1 1 0; min-width: 0; }
   }
 
+  /* === 钉钉审核深链：专用全屏审核页，不展示后台侧边栏 === */
+  html.review-deep-link-mode,
+  html.review-deep-link-mode body {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #fff;
+  }
+  html.review-deep-link-mode #app {
+    display: block !important;
+    min-height: 100dvh;
+    background: #fff;
+  }
+  html.review-deep-link-mode #sidebar,
+  html.review-deep-link-mode #page-header,
+  html.review-deep-link-mode #page-body {
+    display: none !important;
+  }
+  html.review-deep-link-mode #main-content {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+  html.review-deep-link-mode #modal-overlay {
+    inset: 0 !important;
+    padding: 0 !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+    background: #fff !important;
+    backdrop-filter: none !important;
+  }
+  html.review-deep-link-mode #modal-box {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100dvh !important;
+    max-height: none !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    animation: none !important;
+  }
+  html.review-deep-link-mode #modal-box > div:first-child {
+    padding: 12px 16px !important;
+  }
+  html.review-deep-link-mode #modal-close-x {
+    display: none !important;
+  }
+  html.review-deep-link-mode .review-modal-layout {
+    height: calc(100dvh - 57px) !important;
+  }
+  html.review-deep-link-mode .review-modal-scroll {
+    padding: 18px 16px !important;
+  }
+  html.review-deep-link-mode .review-modal-scroll .grid.grid-cols-2 {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px !important;
+  }
+  html.review-deep-link-mode .review-modal-footer {
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom)) !important;
+    gap: 8px !important;
+  }
+  html.review-deep-link-mode .review-modal-footer .cos-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+  html.review-deep-link-mode .review-state-body {
+    display: flex;
+    min-height: calc(100dvh - 57px);
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+
   /* === Toast === */
   .toast-enter { animation: toastIn 0.25s ease-out; }
   @keyframes toastIn { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:translateX(0); } }
@@ -951,6 +1026,14 @@ tailwind.config = {
     }
   }
 }
+</script>
+<script>
+try {
+  const __contentOsUrl = new URL(window.location.href);
+  if(__contentOsUrl.searchParams.get('review')) {
+    document.documentElement.classList.add('review-deep-link-mode');
+  }
+} catch(_) {}
 </script>
 </head>
 <body class="bg-gray-50 text-gray-800 antialiased">
@@ -3254,6 +3337,7 @@ S.reviewNotifications = {
     const id = String(topicId || '').trim();
     const url = new URL(`${window.location.origin}${window.location.pathname}`);
     if(id) url.searchParams.set('review', id);
+    url.searchParams.set('view', 'review');
     url.hash = 'topics';
     return url.toString();
   },
@@ -7359,11 +7443,45 @@ P._openRejectReasonModal = async (record) => {
   return (!result || result==='cancel') ? '' : String(result);
 };
 
+P._reviewDeepLinkActive = false;
+P._leaveReviewDeepLink = () => {
+  P._reviewDeepLinkActive = false;
+  document.documentElement.classList.remove('review-deep-link-mode');
+  try { UI.closeModal(null); } catch(_) {}
+  const target = `${window.location.pathname}#topics`;
+  history.replaceState(history.state, '', target);
+  location.reload();
+};
+P._showReviewDeepLinkState = (title, message, tone='success') => {
+  const icon = tone === 'success' ? '✓' : tone === 'error' ? '!' : 'i';
+  const iconClass = tone === 'success' ? 'bg-emerald-100 text-emerald-600' : tone === 'error' ? 'bg-red-100 text-red-600' : 'bg-amber-100 text-amber-600';
+  const html = `<div class="text-center max-w-md mx-auto">
+    <h2>${H.esc(title)}</h2>
+    <div class="w-14 h-14 rounded-full ${iconClass} flex items-center justify-center text-2xl font-semibold mx-auto mb-5">${icon}</div>
+    <p class="text-sm text-gray-600 leading-6">${H.esc(message)}</p>
+    <button type="button" class="cos-btn cos-btn-primary mt-7 w-full" id="review-page-back-btn">返回审核列表</button>
+  </div>`;
+  UI.openModal(html, {width:'max-w-lg', bodyClass:'review-state-body'});
+  setTimeout(() => {
+    const btn = document.getElementById('review-page-back-btn');
+    if(btn) btn.onclick = () => P._leaveReviewDeepLink();
+  }, 0);
+};
+
 P._openReviewModal = async (topicId) => {
-  if(!window.Auth?.canReview?.()) { UI.toast('当前账号没有内容审核权限','error'); return; }
+  if(!window.Auth?.canReview?.()) {
+    if(P._reviewDeepLinkActive) P._showReviewDeepLinkState('无法打开审核任务', '当前账号没有内容审核权限。', 'error');
+    else UI.toast('当前账号没有内容审核权限','error');
+    return;
+  }
   const topic = S.topics.get(topicId);
   const record = S.reviewQueue.get(topicId);
-  if(!topic || !record) { UI.toast('未找到待审核内容','error'); return; }
+  if(!topic || !record) {
+    if(P._reviewDeepLinkActive) P._showReviewDeepLinkState('审核任务不可用', '该内容已被处理、已撤销或不存在。', 'info');
+    else UI.toast('未找到待审核内容','error');
+    return;
+  }
+  const cancelLabel = P._reviewDeepLinkActive ? '返回后台' : '取消';
   const d = record.publishData || {};
   const screenshots = H.normalizeImageList(d.publishScreenshot);
   const videos = H.normalizeVideoList(d.publishVideos);
@@ -7388,7 +7506,7 @@ P._openReviewModal = async (topicId) => {
     ${videos.length?`<div class="mb-4"><span class="text-xs text-gray-400">发布视频（${videos.length} 个）</span><div class="mt-2 flex flex-wrap gap-3">${videos.map(video=>`<div class="video-preview-card detail-video-preview" data-video-preview="${H.esc(video)}" tabindex="0" role="button"><video src="${H.esc(video)}" preload="metadata" muted playsinline></video><span class="video-preview-play">▶</span></div>`).join('')}</div></div>`:''}
     </div>
     <div class="review-modal-footer">
-      <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">取消</button>
+      <button type="button" class="cos-btn cos-btn-secondary" data-modal-action="cancel">${cancelLabel}</button>
       <button type="button" class="cos-btn cos-btn-secondary text-red-600" id="review-reject-btn">驳回修改</button>
       <button type="button" class="cos-btn cos-btn-primary" id="review-approve-btn">审核通过</button>
     </div>
@@ -7419,12 +7537,21 @@ P._openReviewModal = async (topicId) => {
     document.getElementById('review-approve-btn').onclick = ()=>UI.closeModal('approve');
   },50);
   const action = await promise;
-  if(!action || action==='cancel') return;
+  if(!action || action==='cancel') {
+    if(P._reviewDeepLinkActive) P._leaveReviewDeepLink();
+    return;
+  }
   if(action === 'reject') {
     const reason = await P._openRejectReasonModal(record);
-    if(!reason) return;
+    if(!reason) {
+      if(P._reviewDeepLinkActive) setTimeout(() => P._openReviewModal(topicId), 50);
+      return;
+    }
+    const deepLinkMode = !!P._reviewDeepLinkActive;
     try {
+      if(deepLinkMode) UI.dataLoading.show({title:'正在提交驳回结果', message:'正在保存审核意见...', detail:'保存完成后会自动通知提交人'});
       const rejectedRecord = await S.reviewQueue.reject(topicId, reason);
+      if(deepLinkMode) UI.dataLoading.hide();
       UI.toast('已驳回，运营人员可查看原因并重新提交');
       P.renderTopics();
       S.reviewNotifications.sendInBackground({
@@ -7434,16 +7561,24 @@ P._openReviewModal = async (topicId) => {
         reviewerName:rejectedRecord?.reviewerName || rejectedRecord?.reviewerEmail || '',
         rejectReason:rejectedRecord?.rejectReason || reason
       }, '驳回已保存，但钉钉提醒发送失败');
+      if(deepLinkMode) P._showReviewDeepLinkState('已驳回修改', '审核意见已保存，并将异步发送钉钉通知。', 'success');
     }
-    catch(e) { UI.toast(e?.message || '驳回失败','error'); }
+    catch(e) {
+      if(deepLinkMode) UI.dataLoading.hide();
+      UI.toast(e?.message || '驳回失败','error');
+      if(deepLinkMode) setTimeout(() => P._openReviewModal(topicId), 80);
+    }
     return;
   }
   const confirmed = await UI.confirm('审核通过','通过后将自动进入内容日历和内容库，是否确认？',{confirmText:'确认通过'});
   if(!confirmed) return;
+  const deepLinkMode = !!P._reviewDeepLinkActive;
   try {
-    UI.toast('正在审核并同步到内容库和内容日历…','info');
+    if(deepLinkMode) UI.dataLoading.show({title:'正在审核通过', message:'正在同步内容库和内容日历...', detail:'请勿关闭当前页面'});
+    else UI.toast('正在审核并同步到内容库和内容日历…','info');
     const approvedRecord = {...record};
     await S.reviewQueue.approve(topicId);
+    if(deepLinkMode) UI.dataLoading.hide();
     UI.toast('审核通过，内容已同步到内容日历和内容库');
     P.renderTopics();
     S.reviewNotifications.sendInBackground({
@@ -7452,13 +7587,16 @@ P._openReviewModal = async (topicId) => {
       submitterName:approvedRecord.submitterName || approvedRecord.submitterEmail || '',
       reviewerName:window.Auth?.currentUser?.name || window.Auth?.currentUser?.username || window.Auth?.currentUser?.email || ''
     }, '审核已通过，但钉钉提醒发送失败');
+    if(deepLinkMode) P._showReviewDeepLinkState('审核已通过', '内容已同步到内容库和内容日历，钉钉结果通知将在后台发送。', 'success');
   } catch(e) {
+    if(deepLinkMode) UI.dataLoading.hide();
     console.error('❌ [REVIEW APPROVE] 审核通过失败：', e);
     UI.toast(e?.message || '审核通过失败','error');
+    if(deepLinkMode) setTimeout(() => P._openReviewModal(topicId), 80);
   }
 };
 
-// --- 钉钉审核深链：登录并加载选题库后，直接打开指定待审核内容 ---
+// --- 钉钉审核深链：打开专用全屏审核页，不显示运营后台侧边栏 ---
 P._reviewDeepLinkHandled = false;
 P.openReviewDeepLink = () => {
   if(P._reviewDeepLinkHandled) return false;
@@ -7466,26 +7604,30 @@ P.openReviewDeepLink = () => {
   const topicId = String(url.searchParams.get('review') || '').trim();
   if(!topicId) return false;
   P._reviewDeepLinkHandled = true;
+  P._reviewDeepLinkActive = true;
+  document.documentElement.classList.add('review-deep-link-mode');
+  document.title = '内容审核 · 漫游心迹';
 
-  // 只清除 review 参数，保留其他查询参数与 #topics，避免刷新后重复弹出审核窗口。
+  // 登录和数据加载完成后再清理参数，避免刷新时重复打开；保留 #topics 作为数据加载路由。
   url.searchParams.delete('review');
+  url.searchParams.delete('view');
   const cleanSearch = url.searchParams.toString();
   const cleanUrl = `${url.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${url.hash || '#topics'}`;
   history.replaceState(history.state, '', cleanUrl);
 
   if(!window.Auth?.canReview?.()) {
-    UI.toast('当前账号没有内容审核权限，无法打开该审核任务', 'error');
+    P._showReviewDeepLinkState('无法打开审核任务', '当前账号没有内容审核权限，请更换有审核权限的账号。', 'error');
     return false;
   }
 
   const topic = S.topics.get(topicId);
   const record = S.reviewQueue.get(topicId);
   if(!topic || !record || topic.status !== 'pending_review' || record.status !== 'pending') {
-    UI.toast('该内容已审核、已撤销或不存在', 'warn');
+    P._showReviewDeepLinkState('审核任务已处理', '该内容可能已通过、已驳回、已撤销或不存在。', 'info');
     return false;
   }
 
-  // 路由已经完成渲染，稍后打开详情，避免与页面首屏 DOM 更新冲突。
+  // 路由已经完成数据加载，直接以全屏页面形式展示审核详情。
   setTimeout(() => P._openReviewModal(topicId), 80);
   return true;
 };
