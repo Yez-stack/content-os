@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>漫游心迹运营后台</title>
+<!-- 2026-08-06: 接入钉钉审核群通知；提交审核、审核通过、审核驳回后调用 Supabase Edge Function 发送提醒 -->
 <!-- 2026-08-05: 修复审核通过无响应：不再审核时全量加载内容库，改为按 topic_id 轻量查重并立即写入内容库/内容日历 -->
 <!-- 2026-08-05: 内容库顶部统计改为总内容数、总曝光、总点赞、总评论、总投流金额；分页时并行读取轻量 metrics 汇总 -->
 <!-- 2026-08-04: 启动改为侧边栏按需懒加载；首次只加载当前栏目，切换栏目再加载对应数据并复用缓存 -->
@@ -3240,6 +3241,34 @@ S.reviewPermissions = {
     const { error } = await SUPABASE.from('config').upsert({key:S.reviewPermissions.KEY, value});
     if(error) throw new Error('审核权限保存失败：' + error.message);
     return value;
+  }
+};
+
+// --- 钉钉审核通知（通过 Supabase Edge Function；失败不影响主审核流程） ---
+S.reviewNotifications = {
+  FUNCTION_NAME: 'send-dingtalk-notification',
+  targetUrl: () => `${window.location.origin}${window.location.pathname}#topics`,
+  send: async (payload={}) => {
+    try {
+      const body = {
+        ...payload,
+        title: String(payload.title || '').trim(),
+        submitterName: String(payload.submitterName || '').trim(),
+        reviewerName: String(payload.reviewerName || '').trim(),
+        rejectReason: String(payload.rejectReason || '').trim(),
+        targetUrl: String(payload.targetUrl || S.reviewNotifications.targetUrl()).trim()
+      };
+      if(!body.event || !body.title) throw new Error('通知类型或内容标题为空');
+      const { data, error } = await SUPABASE.functions.invoke(S.reviewNotifications.FUNCTION_NAME, { body });
+      if(error) throw new Error(data?.error || error.message || 'Edge Function 调用失败');
+      if(data?.ok === false) throw new Error(data?.error || '钉钉接口返回失败');
+      window.CONTENT_OS_DEBUG && console.log('✅ [DINGTALK] 审核通知发送成功：', body.event, body.title);
+      return {ok:true, data:data || {}};
+    } catch(error) {
+      const message = error?.message || String(error || '钉钉通知发送失败');
+      console.warn('⚠️ [DINGTALK] 审核通知发送失败：', message);
+      return {ok:false, error:message};
+    }
   }
 };
 
@@ -7247,7 +7276,7 @@ P._openPublishModal = async (topicId) => {
   data.theme = data.theme || t.theme || '';
   Object.assign(data, P._publisherFields(defaultPublisher));
   try {
-    await S.reviewQueue.submit(topicId, data);
+    const submittedRecord = await S.reviewQueue.submit(topicId, data);
     const newRecord = S.reviewQueue.get(topicId);
     const newMediaUrls = H.getReviewMediaUrls(newRecord);
     const removedCandidates = [...new Set([
@@ -7255,8 +7284,14 @@ P._openPublishModal = async (topicId) => {
       ...oldReviewMediaUrls.filter(url => !newMediaUrls.includes(url))
     ])];
     const cleanup = await H.deleteUnreferencedStorageUrls(removedCandidates);
+    const dingResult = await S.reviewNotifications.send({
+      event:'submitted',
+      title:t.title,
+      submitterName:submittedRecord?.submitterName || submittedRecord?.submitterEmail || ''
+    });
     if(cleanup.failed?.length) UI.toast(`审核已提交，但有 ${cleanup.failed.length} 个云端文件清理失败，请检查 Storage DELETE 权限`, 'warn');
     else UI.toast(isResubmitReview ? '已重新提交审核' : '已提交审核，审核通过后将自动进入内容日历和内容库');
+    if(!dingResult.ok) UI.toast(`审核已提交，但钉钉提醒发送失败：${dingResult.error}`, 'warn');
     P.renderTopics();
   } catch(e) {
     UI.toast(e?.message || '提交审核失败，请重试', 'error');
@@ -7361,7 +7396,19 @@ P._openReviewModal = async (topicId) => {
   if(action === 'reject') {
     const reason = await P._openRejectReasonModal(record);
     if(!reason) return;
-    try { await S.reviewQueue.reject(topicId, reason); UI.toast('已驳回，运营人员可查看原因并重新提交'); P.renderTopics(); }
+    try {
+      const rejectedRecord = await S.reviewQueue.reject(topicId, reason);
+      const dingResult = await S.reviewNotifications.send({
+        event:'rejected',
+        title:topic.title,
+        submitterName:rejectedRecord?.submitterName || rejectedRecord?.submitterEmail || '',
+        reviewerName:rejectedRecord?.reviewerName || rejectedRecord?.reviewerEmail || '',
+        rejectReason:rejectedRecord?.rejectReason || reason
+      });
+      UI.toast('已驳回，运营人员可查看原因并重新提交');
+      if(!dingResult.ok) UI.toast(`驳回已保存，但钉钉提醒发送失败：${dingResult.error}`, 'warn');
+      P.renderTopics();
+    }
     catch(e) { UI.toast(e?.message || '驳回失败','error'); }
     return;
   }
@@ -7369,8 +7416,16 @@ P._openReviewModal = async (topicId) => {
   if(!confirmed) return;
   try {
     UI.toast('正在审核并同步到内容库和内容日历…','info');
+    const approvedRecord = {...record};
     await S.reviewQueue.approve(topicId);
+    const dingResult = await S.reviewNotifications.send({
+      event:'approved',
+      title:topic.title,
+      submitterName:approvedRecord.submitterName || approvedRecord.submitterEmail || '',
+      reviewerName:window.Auth?.currentUser?.name || window.Auth?.currentUser?.username || window.Auth?.currentUser?.email || ''
+    });
     UI.toast('审核通过，内容已同步到内容日历和内容库');
+    if(!dingResult.ok) UI.toast(`审核已通过，但钉钉提醒发送失败：${dingResult.error}`, 'warn');
     P.renderTopics();
   } catch(e) {
     console.error('❌ [REVIEW APPROVE] 审核通过失败：', e);
