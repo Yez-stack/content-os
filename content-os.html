@@ -14,6 +14,7 @@
 <!-- 2026-08-05: 发布账号改为可选；可从账号管理选择，也可留空保存 -->
 <!-- 2026-08-05: 内容库继续按页加载；导入时单独读取全库轻量索引，小红书未匹配数据只跳过不新增 -->
 <!-- 2026-08-05: 小红书导入改为每批 8 条并发更新，并取消每条更新返回完整记录，减少等待时间 -->
+<!-- 2026-08-06: 钉钉审核消息支持深链直达对应审核详情；登录后自动打开，已处理/无权限时给出明确提示 -->
 <!-- 2026-07-30: 新增内容审核流程；审核通过后才进入内容日历和内容库；支持配置审核权限与填写驳回原因 -->
 <!-- 2026-07-30: 选题库仅展示待做/待审核/审核驳回；废弃内容从看板、列表和日历隐藏 -->
 <!-- 2026-07-30: 删除图片/视频/整条内容时同步清理 images 存储桶；待审核内容支持提交人撤销并重新编辑 -->
@@ -3249,6 +3250,13 @@ S.reviewPermissions = {
 S.reviewNotifications = {
   FUNCTION_NAME: 'send-dingtalk-notification',
   targetUrl: () => `${window.location.origin}${window.location.pathname}#topics`,
+  reviewTargetUrl: (topicId) => {
+    const id = String(topicId || '').trim();
+    const url = new URL(`${window.location.origin}${window.location.pathname}`);
+    if(id) url.searchParams.set('review', id);
+    url.hash = 'topics';
+    return url.toString();
+  },
   send: async (payload={}) => {
     try {
       const body = {
@@ -7309,7 +7317,8 @@ P._openPublishModal = async (topicId) => {
     S.reviewNotifications.sendInBackground({
       event:'submitted',
       title:t.title,
-      submitterName:submittedRecord?.submitterName || submittedRecord?.submitterEmail || ''
+      submitterName:submittedRecord?.submitterName || submittedRecord?.submitterEmail || '',
+      targetUrl:S.reviewNotifications.reviewTargetUrl(topicId)
     }, '审核已提交，但钉钉提醒发送失败');
   } catch(e) {
     UI.toast(e?.message || '提交审核失败，请重试', 'error');
@@ -7447,6 +7456,38 @@ P._openReviewModal = async (topicId) => {
     console.error('❌ [REVIEW APPROVE] 审核通过失败：', e);
     UI.toast(e?.message || '审核通过失败','error');
   }
+};
+
+// --- 钉钉审核深链：登录并加载选题库后，直接打开指定待审核内容 ---
+P._reviewDeepLinkHandled = false;
+P.openReviewDeepLink = () => {
+  if(P._reviewDeepLinkHandled) return false;
+  const url = new URL(window.location.href);
+  const topicId = String(url.searchParams.get('review') || '').trim();
+  if(!topicId) return false;
+  P._reviewDeepLinkHandled = true;
+
+  // 只清除 review 参数，保留其他查询参数与 #topics，避免刷新后重复弹出审核窗口。
+  url.searchParams.delete('review');
+  const cleanSearch = url.searchParams.toString();
+  const cleanUrl = `${url.pathname}${cleanSearch ? `?${cleanSearch}` : ''}${url.hash || '#topics'}`;
+  history.replaceState(history.state, '', cleanUrl);
+
+  if(!window.Auth?.canReview?.()) {
+    UI.toast('当前账号没有内容审核权限，无法打开该审核任务', 'error');
+    return false;
+  }
+
+  const topic = S.topics.get(topicId);
+  const record = S.reviewQueue.get(topicId);
+  if(!topic || !record || topic.status !== 'pending_review' || record.status !== 'pending') {
+    UI.toast('该内容已审核、已撤销或不存在', 'warn');
+    return false;
+  }
+
+  // 路由已经完成渲染，稍后打开详情，避免与页面首屏 DOM 更新冲突。
+  setTimeout(() => P._openReviewModal(topicId), 80);
+  return true;
 };
 
 // ==================== 灵感 Modal ====================
@@ -16322,11 +16363,12 @@ R.navigate = async (route, options={}) => {
 // --- 监听浏览器前进/后退 ---
 R.init = () => {
   const hash = window.location.hash.replace('#','') || 'workbench';
-  R.navigate(hash, {replace:true});
+  const initialNavigation = R.navigate(hash, {replace:true});
   window.addEventListener('popstate', () => {
     const newRoute = window.location.hash.replace('#','') || 'workbench';
     if(newRoute !== R.currentRoute) R.navigate(newRoute, {replace:true});
   });
+  return initialNavigation;
 };
 
 })();
@@ -16376,8 +16418,9 @@ async function init() {
   // 3. 初始化侧边栏
   R.initSidebar();
 
-  // 4. 初始化路由
-  R.init();
+  // 4. 初始化路由；钉钉审核深链需要等待选题库与审核配置加载完成。
+  await R.init();
+  P.openReviewDeepLink?.();
 
   // 5. 全局键盘快捷键
   document.addEventListener('keydown', (e) => {
