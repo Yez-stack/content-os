@@ -6823,15 +6823,10 @@ P.renderTopics = (containerId) => {
       P.renderTopics();
     }
   });
-  document.querySelectorAll('[data-publish-topic]').forEach(b=>b.onclick=async(e)=>{
+  // 提交审核只需要当前选题和审核草稿，不再预加载整个内容库。
+  document.querySelectorAll('[data-publish-topic]').forEach(b=>b.onclick=(e)=>{
     e.stopPropagation();
-    try {
-      if(!S.isModuleLoaded('contents')) {
-        UI.toast('正在加载发布所需的内容数据...', 'info');
-        await S.loadModule('contents');
-      }
-      P._openPublishModal(b.dataset.publishTopic);
-    } catch(err) { UI.toast(err?.message || '内容数据加载失败，暂时无法发布', 'error'); }
+    P._openPublishModal(b.dataset.publishTopic);
   });
   document.querySelectorAll('[data-withdraw-review]').forEach(b=>b.onclick=async(e)=>{
     e.stopPropagation();
